@@ -306,10 +306,21 @@ export const Friends = () => {
           {/* Main Room Card */}
           <div className={`friends-card ${activeRoom ? 'active-room-box' : ''}`}>
             <div className="friends-card-header">
-              <h2 className="friends-card-title">
-                <Radio size={20} color="var(--brand-red)" />
-                {activeRoom ? activeRoom.name : 'Start a Listening Session'}
-              </h2>
+              <div>
+                <h2 className="friends-card-title">
+                  <Radio size={20} color="var(--brand-red)" />
+                  {activeRoom ? activeRoom.name : 'Start a Listening Session'}
+                </h2>
+                {activeRoom && (
+                  <p style={{ margin: '4px 0 0', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+                    {isHost ? (
+                      <span>You are hosting this session</span>
+                    ) : (
+                      <span>Hosted by <strong style={{ color: '#fff' }}>{activeRoom.hostName || 'Room Host'}</strong></span>
+                    )}
+                  </p>
+                )}
+              </div>
               {activeRoom && (
                 <div className="active-room-status-badge">
                   <span className="status-pulse-dot" /> LIVE SESSION
@@ -355,6 +366,26 @@ export const Friends = () => {
                     </button>
                   )}
                 </div>
+
+                {/* Local Volume Control for Participants */}
+                {!isHost && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 14px', background: 'rgba(255,255,255,0.03)', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.06)' }}>
+                    <Volume2 size={16} color="var(--brand-red)" />
+                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', fontWeight: 600 }}>My Volume</span>
+                    <input
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.01"
+                      value={player.volume}
+                      onChange={(e) => player.setVolume(parseFloat(e.target.value))}
+                      style={{ flex: 1, accentColor: 'var(--brand-red, #ff1616)', cursor: 'pointer' }}
+                    />
+                    <span style={{ fontSize: '0.8rem', color: '#fff', width: '36px', textAlign: 'right', fontWeight: 700 }}>
+                      {Math.round(player.volume * 100)}%
+                    </span>
+                  </div>
+                )}
 
                 {/* Shared Playing Track */}
                 <div>

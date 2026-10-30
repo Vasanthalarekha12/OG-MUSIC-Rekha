@@ -43,7 +43,7 @@ interface PlayerContextType {
   togglePlay: () => void;
   next: () => void;
   previous: () => void;
-  seek: (time: number) => void;
+  seek: (time: number, isInternalSync?: boolean) => void;
   setVolume: (volume: number) => void;
   toggleMute: () => void;
   playbackRate: number;
@@ -335,6 +335,20 @@ export const PlayerProvider = ({ children }: { children: ReactNode }) => {
     setCurrentTime(0);
     setDuration(song.duration || 0);
     recommendationService.recordPlay(song);
+
+    const broadcastTrack = (t: Song) => {
+      if (!isListenerMode && broadcastCallbackRef.current) {
+        broadcastCallbackRef.current({
+          type: 'TRACK_CHANGE',
+          track: t,
+          position: 0,
+          queue,
+          queueIndex,
+          shuffle: isShuffle,
+          repeat: repeatMode
+        });
+      }
+    };
     
     // 1. If song is already a YouTube track or has an associated full YouTube ID
     const directYtId = (song.youtubeId && /^[a-zA-Z0-9_-]{11}$/.test(song.youtubeId))
@@ -342,9 +356,8 @@ export const PlayerProvider = ({ children }: { children: ReactNode }) => {
       : (/^[a-zA-Z0-9_-]{11}$/.test(song.id) ? song.id : null);
 
     if (directYtId) {
-      song.youtubeId = directYtId;
-      song.sourceType = 'youtube';
-      setCurrentTrack({ ...song, youtubeId: directYtId, sourceType: 'youtube' });
+      const fullSong: Song = { ...song, youtubeId: directYtId, sourceType: 'youtube' };
+      setCurrentTrack(fullSong);
       audioEngine.audio.pause();
       audioEngine.audio.removeAttribute('src');
       audioEngine.audio.load();
@@ -352,6 +365,7 @@ export const PlayerProvider = ({ children }: { children: ReactNode }) => {
         ytPlayerRef.current.loadVideoById(directYtId);
         setIsPlaying(true);
       }
+      broadcastTrack(fullSong);
       return;
     }
 
@@ -361,9 +375,8 @@ export const PlayerProvider = ({ children }: { children: ReactNode }) => {
       try {
         const resolvedYtId = await fullTrackResolver.resolveFullTrack(song);
         if (resolvedYtId) {
-          song.youtubeId = resolvedYtId;
-          song.sourceType = 'youtube';
-          setCurrentTrack({ ...song, youtubeId: resolvedYtId, sourceType: 'youtube' });
+          const resolvedSong: Song = { ...song, youtubeId: resolvedYtId, sourceType: 'youtube' };
+          setCurrentTrack(resolvedSong);
           audioEngine.audio.pause();
           audioEngine.audio.removeAttribute('src');
           audioEngine.audio.load();
@@ -372,6 +385,7 @@ export const PlayerProvider = ({ children }: { children: ReactNode }) => {
             setIsPlaying(true);
             setLoading(false);
           }
+          broadcastTrack(resolvedSong);
           return;
         }
       } catch (err) {
@@ -381,7 +395,8 @@ export const PlayerProvider = ({ children }: { children: ReactNode }) => {
 
     // 3. Fallback to direct full audio
     playDirectAudio(song);
-  }, [playDirectAudio]);
+    broadcastTrack(song);
+  }, [playDirectAudio, isListenerMode, queue, queueIndex, isShuffle, repeatMode]);
 
   const play = useCallback((song?: Song, context?: DiscoveryContext) => {
     if (song) {
@@ -448,15 +463,31 @@ export const PlayerProvider = ({ children }: { children: ReactNode }) => {
   }, [loadAndPlayTrack]);
 
   const pause = useCallback(() => {
+    if (isListenerMode) return;
     if (currentTrack?.sourceType === 'youtube') {
       if (ytPlayerRef.current) ytPlayerRef.current.pauseVideo();
     } else {
       audioEngine.audio.pause();
     }
     setIsPlaying(false);
-  }, [currentTrack]);
+    if (!isListenerMode && broadcastCallbackRef.current) {
+      broadcastCallbackRef.current({
+        type: 'PAUSE',
+        track: currentTrack,
+        position: currentTime,
+        queue,
+        queueIndex,
+        shuffle: isShuffle,
+        repeat: repeatMode
+      });
+    }
+  }, [currentTrack, isListenerMode, currentTime, queue, queueIndex, isShuffle, repeatMode]);
 
   const togglePlay = useCallback(() => {
+    if (isListenerMode) {
+      console.info('Playback is controlled authoritatively by the room host.');
+      return;
+    }
     if (isPlaying) {
       pause();
     } else {
@@ -465,8 +496,20 @@ export const PlayerProvider = ({ children }: { children: ReactNode }) => {
       } else {
         audioEngine.audio.play().catch(() => setError('Playback failed'));
       }
+      setIsPlaying(true);
+      if (!isListenerMode && broadcastCallbackRef.current) {
+        broadcastCallbackRef.current({
+          type: 'PLAY',
+          track: currentTrack,
+          position: currentTime,
+          queue,
+          queueIndex,
+          shuffle: isShuffle,
+          repeat: repeatMode
+        });
+      }
     }
-  }, [isPlaying, pause, currentTrack]);
+  }, [isPlaying, pause, currentTrack, isListenerMode, currentTime, queue, queueIndex, isShuffle, repeatMode]);
 
   const next = useCallback(() => {
     if (isListenerMode) {
@@ -525,7 +568,11 @@ export const PlayerProvider = ({ children }: { children: ReactNode }) => {
     }
   }, [isListenerMode, queue, queueIndex, isShuffle, repeatMode, pause, currentTrack, currentTime, duration, loadAndPlayTrack]);
 
-  const seek = useCallback((time: number) => {
+  const seek = useCallback((time: number, isInternalSync: boolean = false) => {
+    if (isListenerMode && !isInternalSync) {
+      console.info('Seek position is controlled authoritatively by the room host.');
+      return;
+    }
     if (currentTrack?.sourceType === 'youtube') {
       if (ytPlayerRef.current) ytPlayerRef.current.seekTo(time, true);
       setCurrentTime(time);
@@ -591,53 +638,165 @@ export const PlayerProvider = ({ children }: { children: ReactNode }) => {
 
   const setVolume = useCallback((val: number) => setVolumeState(Math.max(0, Math.min(1, val))), []);
   const toggleMute = useCallback(() => setIsMuted(prev => !prev), []);
-  const toggleShuffle = useCallback(() => setIsShuffle(prev => !prev), []);
+  
+  const toggleShuffle = useCallback(() => {
+    if (isListenerMode) return;
+    setIsShuffle(prev => {
+      const nextVal = !prev;
+      if (broadcastCallbackRef.current) {
+        broadcastCallbackRef.current({
+          type: 'QUEUE_CHANGE',
+          track: currentTrack,
+          position: currentTime,
+          queue,
+          queueIndex,
+          shuffle: nextVal,
+          repeat: repeatMode
+        });
+      }
+      return nextVal;
+    });
+  }, [isListenerMode, currentTrack, currentTime, queue, queueIndex, repeatMode]);
   
   const toggleRepeat = useCallback(() => {
-    setRepeatMode(prev => prev === 'off' ? 'all' : prev === 'all' ? 'one' : 'off');
-  }, []);
+    if (isListenerMode) return;
+    setRepeatMode(prev => {
+      const nextVal = prev === 'off' ? 'all' : prev === 'all' ? 'one' : 'off';
+      if (broadcastCallbackRef.current) {
+        broadcastCallbackRef.current({
+          type: 'QUEUE_CHANGE',
+          track: currentTrack,
+          position: currentTime,
+          queue,
+          queueIndex,
+          shuffle: isShuffle,
+          repeat: nextVal
+        });
+      }
+      return nextVal;
+    });
+  }, [isListenerMode, currentTrack, currentTime, queue, queueIndex, isShuffle]);
 
   const addToQueue = useCallback((song: Song) => {
-    setQueue(prev => [...prev, { id: Date.now().toString() + Math.random(), song }]);
-  }, []);
+    if (isListenerMode) return;
+    setQueue(prev => {
+      const nextQueue = [...prev, { id: Date.now().toString() + Math.random(), song }];
+      if (broadcastCallbackRef.current) {
+        broadcastCallbackRef.current({
+          type: 'QUEUE_CHANGE',
+          track: currentTrack,
+          position: currentTime,
+          queue: nextQueue,
+          queueIndex,
+          shuffle: isShuffle,
+          repeat: repeatMode
+        });
+      }
+      return nextQueue;
+    });
+  }, [isListenerMode, currentTrack, currentTime, queueIndex, isShuffle, repeatMode]);
 
   const playNext = useCallback((song: Song) => {
+    if (isListenerMode) return;
     setQueue(prev => {
       const newQueue = [...prev];
       newQueue.splice(queueIndex + 1, 0, { id: Date.now().toString() + Math.random(), song });
+      if (broadcastCallbackRef.current) {
+        broadcastCallbackRef.current({
+          type: 'QUEUE_CHANGE',
+          track: currentTrack,
+          position: currentTime,
+          queue: newQueue,
+          queueIndex,
+          shuffle: isShuffle,
+          repeat: repeatMode
+        });
+      }
       return newQueue;
     });
-  }, [queueIndex]);
+  }, [isListenerMode, currentTrack, currentTime, queueIndex, isShuffle, repeatMode]);
 
   const removeFromQueue = useCallback((id: string) => {
-    setQueue(prev => prev.filter(item => item.id !== id));
-  }, []);
+    if (isListenerMode) return;
+    setQueue(prev => {
+      const newQueue = prev.filter(item => item.id !== id);
+      if (broadcastCallbackRef.current) {
+        broadcastCallbackRef.current({
+          type: 'QUEUE_CHANGE',
+          track: currentTrack,
+          position: currentTime,
+          queue: newQueue,
+          queueIndex,
+          shuffle: isShuffle,
+          repeat: repeatMode
+        });
+      }
+      return newQueue;
+    });
+  }, [isListenerMode, currentTrack, currentTime, queueIndex, isShuffle, repeatMode]);
 
   const clearQueue = useCallback(() => {
+    if (isListenerMode) return;
     if (currentTrack && queue[queueIndex]) {
-      setQueue([queue[queueIndex]]);
+      const newQueue = [queue[queueIndex]];
+      setQueue(newQueue);
       setQueueIndex(0);
+      if (broadcastCallbackRef.current) {
+        broadcastCallbackRef.current({
+          type: 'QUEUE_CHANGE',
+          track: currentTrack,
+          position: currentTime,
+          queue: newQueue,
+          queueIndex: 0,
+          shuffle: isShuffle,
+          repeat: repeatMode
+        });
+      }
     } else {
       setQueue([]);
       setQueueIndex(-1);
+      if (broadcastCallbackRef.current) {
+        broadcastCallbackRef.current({
+          type: 'QUEUE_CHANGE',
+          track: null,
+          position: 0,
+          queue: [],
+          queueIndex: -1,
+          shuffle: isShuffle,
+          repeat: repeatMode
+        });
+      }
     }
-  }, [currentTrack, queue, queueIndex]);
+  }, [isListenerMode, currentTrack, queue, queueIndex, currentTime, isShuffle, repeatMode]);
 
   const jumpToQueue = useCallback((index: number) => {
+    if (isListenerMode) return;
     if (queue[index]) {
       setQueueIndex(index);
       loadAndPlayTrack(queue[index].song);
     }
-  }, [queue]);
+  }, [isListenerMode, queue, loadAndPlayTrack]);
 
   const reorderQueue = useCallback((startIndex: number, endIndex: number) => {
+    if (isListenerMode) return;
     setQueue(prev => {
       const result = Array.from(prev);
       const [removed] = result.splice(startIndex, 1);
       result.splice(endIndex, 0, removed);
+      if (broadcastCallbackRef.current) {
+        broadcastCallbackRef.current({
+          type: 'QUEUE_CHANGE',
+          track: currentTrack,
+          position: currentTime,
+          queue: result,
+          queueIndex,
+          shuffle: isShuffle,
+          repeat: repeatMode
+        });
+      }
       return result;
     });
-  }, []);
+  }, [isListenerMode, currentTrack, currentTime, queueIndex, isShuffle, repeatMode]);
 
   // Sync MediaSession API
   useEffect(() => {

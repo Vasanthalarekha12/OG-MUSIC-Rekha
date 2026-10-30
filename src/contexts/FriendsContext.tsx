@@ -258,7 +258,7 @@ export const FriendsProvider = ({ children }: { children: ReactNode }) => {
       player.play(remoteTrack);
       setTimeout(() => {
         if (expectedPos > 0) {
-          player.seek(expectedPos);
+          player.seek(expectedPos, true);
         }
         if (remotePlayState === 'paused') {
           player.pause();
@@ -288,7 +288,7 @@ export const FriendsProvider = ({ children }: { children: ReactNode }) => {
 
     if (drift > 2.5 && remotePlayState === 'playing') {
       isApplyingRemoteSyncRef.current = true;
-      player.seek(expectedPos);
+      player.seek(expectedPos, true);
       setTimeout(() => { isApplyingRemoteSyncRef.current = false; }, 300);
     }
   }, [
@@ -298,6 +298,46 @@ export const FriendsProvider = ({ children }: { children: ReactNode }) => {
     activeRoom?.playbackState,
     activeRoom?.basePosition,
     activeRoom?.baseTimestamp,
+  ]);
+
+  // 6b. Continuous drift checker for listeners (every 3 seconds)
+  const playerCurrentTimeRef = useRef(player.currentTime);
+  useEffect(() => {
+    playerCurrentTimeRef.current = player.currentTime;
+  }, [player.currentTime]);
+
+  useEffect(() => {
+    if (!isListener || !activeRoom || !activeRoom.currentTrack || activeRoom.playbackState !== 'playing') {
+      return;
+    }
+
+    const interval = setInterval(() => {
+      if (isApplyingRemoteSyncRef.current) return;
+      const basePos = activeRoom.basePosition;
+      const baseTs = activeRoom.baseTimestamp;
+      const elapsed = (Date.now() - baseTs) / 1000;
+      const expectedPos = Math.max(0, basePos + elapsed);
+      const currentPos = playerCurrentTimeRef.current;
+      const drift = Math.abs(currentPos - expectedPos);
+      
+      setSyncDrift(Math.round(drift * 10) / 10);
+      setIsSynced(drift < 2.5);
+
+      if (drift > 2.5) {
+        isApplyingRemoteSyncRef.current = true;
+        player.seek(expectedPos, true);
+        setTimeout(() => { isApplyingRemoteSyncRef.current = false; }, 300);
+      }
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [
+    isListener,
+    activeRoom?.id,
+    activeRoom?.basePosition,
+    activeRoom?.baseTimestamp,
+    activeRoom?.playbackState,
+    player.seek
   ]);
 
   // ==========================================
