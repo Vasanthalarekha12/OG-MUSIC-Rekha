@@ -1,0 +1,516 @@
+/* ==========================================================
+   MARUDHAM OG MUSIC — CINEMATIC 3D LOGO LOADER
+   High-performance GPU-accelerated 3D Fragment Assembly
+   ========================================================== */
+
+.og-intro-overlay,
+.cinematic-loader-root {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
+  background: #000000;
+  background-color: #000000;
+  z-index: 999999;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  user-select: none;
+  font-family: inherit;
+  transition: opacity 0.55s cubic-bezier(0.16, 1, 0.3, 1),
+              transform 0.55s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.og-intro-overlay.is-exiting,
+.cinematic-loader-root.is-exiting {
+  opacity: 0;
+  transform: scale(1.04);
+  pointer-events: none;
+}
+
+/* Background Atmospheric Canvas */
+.cinematic-bg-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Central Volumetric Light Atmosphere (spans full viewport seamlessly) */
+.cinematic-volumetric-glow {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  background: radial-gradient(
+    ellipse 85% 75% at 50% 50%,
+    rgba(220, 38, 38, 0.35) 0%,
+    rgba(180, 20, 20, 0.15) 35%,
+    rgba(80, 10, 10, 0.05) 65%,
+    transparent 100%
+  );
+  pointer-events: none;
+  z-index: 2;
+  transition: opacity 1s ease;
+  animation: cinematicGlowBreathe 3.6s ease-in-out infinite;
+}
+
+@keyframes cinematicGlowBreathe {
+  0%, 100% {
+    opacity: 0.75;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* 3D Viewport Stage: Centered across entire viewport */
+.og-intro-stage,
+.cinematic-stage {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 5;
+  perspective: 1400px;
+  perspective-origin: 50% 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  transform-style: preserve-3d;
+  box-sizing: border-box;
+  pointer-events: none;
+  transition: transform 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* 3D Logo Assembly Box: Proportional responsive viewport scaling */
+.og-intro-logo-box,
+.cinematic-logo-box {
+  position: relative;
+  width: min(90vw, 1400px);
+  max-width: 90vw;
+  max-height: 82vh;
+  max-height: 82dvh;
+  aspect-ratio: 1264 / 848;
+  height: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transform-style: preserve-3d;
+  transform-origin: 50% 50%;
+  will-change: transform;
+}
+
+/* Impact pulse animation on assembly completion */
+.og-intro-logo-box.has-impacted,
+.cinematic-logo-box.has-impacted {
+  animation: cinematicImpact 0.65s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+/* Explicit final reveal state: preserve full intended cinematic scale smoothly (prominent viewport coverage) */
+.og-intro-logo-box.is-final-reveal,
+.cinematic-logo-box.is-final-reveal {
+  transform: scale(1.04) translateZ(0);
+  transform-origin: 50% 50%;
+  transition: transform 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: transform;
+}
+
+@keyframes cinematicImpact {
+  0% {
+    transform: scale(0.96) translateZ(-35px);
+  }
+  35% {
+    transform: scale(1.08) translateZ(20px);
+  }
+  70% {
+    transform: scale(1.02) translateZ(-4px);
+  }
+  100% {
+    transform: scale(1.04) translateZ(0);
+  }
+}
+
+/* Logo display rules matching full-screen specification */
+.og-intro-logo {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: 90vw;
+  max-height: 82dvh;
+  height: auto;
+  object-fit: contain;
+  object-position: center;
+  pointer-events: none;
+}
+
+/* 3D Fragment Base */
+.cinematic-shard {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+  will-change: transform, opacity, filter;
+  pointer-events: none;
+}
+
+/* Facet layers inside each shard for true 3D beveled depth */
+.cinematic-facet {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  will-change: transform, filter;
+  transition: filter 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.cinematic-facet-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+/* Front Face (Primary metallic surface) */
+.cinematic-facet-front {
+  transform: translateZ(4px);
+}
+
+/* Bevel Mid Face (Dimensional chiseled edge) */
+.cinematic-facet-mid {
+  transform: translateZ(1px);
+  filter: brightness(0.65) contrast(1.4);
+}
+
+/* Back Extrusion Face (Shadow depth & bevel rim) */
+.cinematic-facet-back {
+  transform: translateZ(-5px);
+  filter: brightness(0.2) contrast(1.8) blur(0.5px);
+}
+
+/* Metallic mode during assembly */
+.metallic-mode .cinematic-facet-front {
+  filter: grayscale(1) brightness(1.75) contrast(1.85) drop-shadow(0 2px 8px rgba(0, 0, 0, 0.8));
+}
+
+/* Specular Gleam Overlay on shards */
+.cinematic-shard-gleam {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.75) 0%,
+    transparent 35%,
+    rgba(220, 240, 255, 0.45) 55%,
+    transparent 75%
+  );
+  mix-blend-mode: overlay;
+  pointer-events: none;
+  opacity: 0.85;
+  transform: translateZ(5px);
+}
+
+/* Seam Glow Flash when fragments connect */
+.cinematic-seams-flash {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 10;
+  opacity: 0;
+  background: radial-gradient(circle at 50% 40%, rgba(255, 255, 255, 0.85) 0%, rgba(220, 38, 38, 0.6) 35%, transparent 70%);
+  mix-blend-mode: color-dodge;
+  transition: opacity 0.4s ease-out;
+}
+
+.cinematic-seams-flash.active {
+  animation: seamFlashPulse 0.6s cubic-bezier(0.1, 0.9, 0.2, 1) forwards;
+}
+
+@keyframes seamFlashPulse {
+  0% {
+    opacity: 0.95;
+    transform: scale(0.96);
+  }
+  30% {
+    opacity: 1;
+    transform: scale(1.02);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.08);
+  }
+}
+
+/* Full Brand Final Master Layer (replaces shards seamlessly at end of assembly) */
+.cinematic-final-brand {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 9;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.cinematic-final-brand img,
+.cinematic-final-brand .og-intro-logo {
+  width: 100%;
+  height: 100%;
+  max-width: 90vw;
+  max-height: 82dvh;
+  object-fit: contain;
+  object-position: center;
+  display: block;
+  filter: drop-shadow(0 0 40px rgba(220, 38, 38, 0.9)) drop-shadow(0 0 80px rgba(220, 38, 38, 0.5));
+}
+
+/* Anamorphic Red & White Light Sweep */
+.cinematic-brand-sweep {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 70%;
+  pointer-events: none;
+  z-index: 12;
+  opacity: 0;
+  display: none;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.05) 30%,
+    rgba(255, 255, 255, 0.9) 48%,
+    rgba(220, 38, 38, 0.95) 52%,
+    rgba(255, 255, 255, 0.7) 56%,
+    transparent 100%
+  );
+  filter: drop-shadow(0 0 16px rgba(255, 50, 50, 0.9));
+  transform: translateX(-150%) skewX(-24deg);
+}
+
+.cinematic-brand-sweep.sweep-active {
+  display: block;
+  opacity: 1;
+  animation: brandAnamorphicSweep 1.3s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+@keyframes brandAnamorphicSweep {
+  0% {
+    transform: translateX(-150%) skewX(-24deg);
+    opacity: 0;
+  }
+  20% {
+    opacity: 1;
+  }
+  75% {
+    opacity: 0.95;
+  }
+  100% {
+    transform: translateX(260%) skewX(-24deg);
+    opacity: 0;
+  }
+}
+
+/* Subtitle and Loading Status: pinned to bottom center so logo remains strictly centered in full viewport */
+.cinematic-status-panel {
+  position: absolute;
+  bottom: max(20px, env(safe-area-inset-bottom, 20px));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 25;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+  transition: opacity 0.4s ease;
+}
+
+.cinematic-tagline {
+  font-size: 11px;
+  letter-spacing: 4px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.75);
+  text-shadow: 0 0 12px rgba(220, 38, 38, 0.45);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cinematic-tagline-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background-color: var(--brand-red, #dc2626);
+  box-shadow: 0 0 6px #dc2626;
+}
+
+/* Precision Cinematic Progress Meter */
+.cinematic-meter-track {
+  width: 140px;
+  height: 2px;
+  background-color: rgba(255, 255, 255, 0.12);
+  border-radius: 2px;
+  overflow: hidden;
+  position: relative;
+}
+
+.cinematic-meter-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  background: linear-gradient(90deg, #991b1b, #dc2626, #f87171);
+  box-shadow: 0 0 10px rgba(220, 38, 38, 0.85);
+  transition: width 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Skip Button (Bottom Right) */
+.cinematic-skip-btn {
+  position: absolute;
+  bottom: max(24px, env(safe-area-inset-bottom, 24px));
+  right: max(28px, env(safe-area-inset-right, 28px));
+  z-index: 20;
+  background: rgba(20, 20, 20, 0.65);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.65);
+  font-size: 11px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  font-weight: 600;
+  padding: 6px 14px;
+  border-radius: 20px;
+  cursor: pointer;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  transition: all 0.25s ease;
+  opacity: 0;
+  animation: skipBtnFadeIn 0.6s ease forwards;
+  animation-delay: 1.2s;
+}
+
+.cinematic-skip-btn:hover {
+  background: rgba(220, 38, 38, 0.25);
+  border-color: rgba(220, 38, 38, 0.5);
+  color: #ffffff;
+  transform: translateY(-1px);
+}
+
+.cinematic-sound-btn {
+  position: absolute;
+  bottom: max(24px, env(safe-area-inset-bottom, 24px));
+  left: max(28px, env(safe-area-inset-left, 28px));
+  z-index: 20;
+  background: rgba(20, 20, 20, 0.65);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.65);
+  font-size: 11px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  font-weight: 600;
+  padding: 6px 14px;
+  border-radius: 20px;
+  cursor: pointer;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  transition: all 0.25s ease;
+  opacity: 0;
+  animation: skipBtnFadeIn 0.6s ease forwards;
+  animation-delay: 0.6s;
+}
+
+.cinematic-sound-btn:hover {
+  background: rgba(220, 38, 38, 0.25);
+  border-color: rgba(220, 38, 38, 0.5);
+  color: #ffffff;
+  transform: translateY(-1px);
+}
+
+@keyframes skipBtnFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 0.75;
+    transform: translateY(0);
+  }
+}
+
+/* Reduced Motion Mode */
+@media (prefers-reduced-motion: reduce) {
+  .cinematic-shard,
+  .cinematic-logo-box,
+  .cinematic-brand-sweep,
+  .cinematic-volumetric-glow,
+  .cinematic-seams-flash {
+    animation: none !important;
+    transition: none !important;
+    transform: none !important;
+  }
+  
+  .cinematic-bg-canvas {
+    display: none !important;
+  }
+}
+
+/* Mobile & Tablet Optimizations */
+@media (max-width: 640px) {
+  .og-intro-stage,
+  .cinematic-stage {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+  .og-intro-logo-box,
+  .cinematic-logo-box {
+    width: 90vw;
+    max-width: 90vw;
+    max-height: 80vh;
+    max-height: 80dvh;
+  }
+  .og-intro-logo-box.is-final-reveal,
+  .cinematic-logo-box.is-final-reveal {
+    transform: scale(1.04) translateZ(0);
+  }
+  @keyframes cinematicImpact {
+    0% { transform: scale(0.96) translateZ(-25px); }
+    35% { transform: scale(1.06) translateZ(15px); }
+    70% { transform: scale(1.01) translateZ(-2px); }
+    100% { transform: scale(1.04) translateZ(0); }
+  }
+  .cinematic-tagline {
+    font-size: 10px;
+    letter-spacing: 2.5px;
+  }
+  .cinematic-meter-track {
+    width: 110px;
+  }
+  .cinematic-skip-btn {
+    bottom: max(16px, env(safe-area-inset-bottom, 16px));
+    right: max(16px, env(safe-area-inset-right, 16px));
+    font-size: 10px;
+    padding: 5px 10px;
+  }
+  .cinematic-sound-btn {
+    bottom: max(16px, env(safe-area-inset-bottom, 16px));
+    left: max(16px, env(safe-area-inset-left, 16px));
+    font-size: 10px;
+    padding: 5px 10px;
+  }
+}
