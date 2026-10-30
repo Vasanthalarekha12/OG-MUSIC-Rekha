@@ -93,6 +93,17 @@ export const Friends = () => {
     return () => { isMounted = false; };
   }, [inviteToken, searchParams]);
 
+  // Automatically navigate into the room as soon as admission is approved
+  useEffect(() => {
+    if (joinRequestStatus === 'accepted' || (activeRoom && guestInvite && activeRoom.id === guestInvite.roomId)) {
+      setGuestInvite(null);
+      setActiveTab('room');
+      if (token) {
+        navigate('/friends', { replace: true });
+      }
+    }
+  }, [joinRequestStatus, activeRoom, guestInvite, token, navigate]);
+
   const handleCopy = async () => {
     const success = await copyInviteLink();
     if (success) {
@@ -157,17 +168,6 @@ export const Friends = () => {
       </div>
     );
   }
-
-  // Automatically navigate into the room as soon as admission is approved
-  useEffect(() => {
-    if (joinRequestStatus === 'accepted' || (activeRoom && guestInvite && activeRoom.id === guestInvite.roomId)) {
-      setGuestInvite(null);
-      setActiveTab('room');
-      if (token) {
-        navigate('/friends', { replace: true });
-      }
-    }
-  }, [joinRequestStatus, activeRoom, guestInvite, token, navigate]);
 
   // If viewing an invitation as a guest user:
   if (guestInvite && joinRequestStatus !== 'accepted' && (!activeRoom || activeRoom.id !== guestInvite.roomId)) {
