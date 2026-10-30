@@ -47,6 +47,8 @@ interface PlayerContextType {
   loudnessEnabled: boolean;
   setLoudnessEnabled: (enabled: boolean) => void;
   webAudioSupported: boolean;
+  isListenerMode: boolean;
+  setIsListenerMode: (enabled: boolean) => void;
   addToQueue: (song: Song) => void;
   playNext: (song: Song) => void;
   removeFromQueue: (id: string) => void;
@@ -104,6 +106,7 @@ export const PlayerProvider = ({ children }: { children: ReactNode }) => {
     return localStorage.getItem('og_music_audio_enhancement') === 'true' || audioEnhancement;
   });
   const [webAudioSupported, setWebAudioSupported] = useState(true);
+  const [isListenerMode, setIsListenerMode] = useState(false);
 
   const ytPlayerRef = useRef<YouTubePlayer | null>(null);
   const recordedTrackIdRef = useRef<string | null>(null);
@@ -450,6 +453,10 @@ export const PlayerProvider = ({ children }: { children: ReactNode }) => {
   }, [isPlaying, pause, currentTrack]);
 
   const next = useCallback(() => {
+    if (isListenerMode) {
+      console.info('Next track is controlled authoritatively by the room host.');
+      return;
+    }
     if (queue.length === 0) return;
 
     if (currentTrack && currentTime < 20 && duration > 30) {
@@ -500,9 +507,23 @@ export const PlayerProvider = ({ children }: { children: ReactNode }) => {
         setCurrentTime(0);
       }
     }
-  }, [queue, queueIndex, isShuffle, repeatMode, pause, currentTrack, currentTime, duration, loadAndPlayTrack]);
+  }, [isListenerMode, queue, queueIndex, isShuffle, repeatMode, pause, currentTrack, currentTime, duration, loadAndPlayTrack]);
+
+  const seek = useCallback((time: number) => {
+    if (currentTrack?.sourceType === 'youtube') {
+      if (ytPlayerRef.current) ytPlayerRef.current.seekTo(time, true);
+      setCurrentTime(time);
+    } else {
+      audioEngine.audio.currentTime = time;
+      setCurrentTime(time);
+    }
+  }, [currentTrack]);
 
   const previous = useCallback(() => {
+    if (isListenerMode) {
+      console.info('Previous track is controlled authoritatively by the room host.');
+      return;
+    }
     if (currentTime > 3) {
       seek(0);
       return;
@@ -519,7 +540,7 @@ export const PlayerProvider = ({ children }: { children: ReactNode }) => {
     } else {
       seek(0);
     }
-  }, [currentTime, queue, queueIndex, repeatMode, loadAndPlayTrack]);
+  }, [isListenerMode, currentTime, queue, queueIndex, repeatMode, loadAndPlayTrack, seek]);
 
   // Handle Audio 'ended' event needing fresh closure state
   useEffect(() => {
@@ -532,24 +553,14 @@ export const PlayerProvider = ({ children }: { children: ReactNode }) => {
       if (repeatMode === 'one') {
         audio.currentTime = 0;
         audio.play().catch(console.error);
-      } else {
+      } else if (!isListenerMode) {
         next();
       }
     };
     
     audio.addEventListener('ended', onEnded);
     return () => audio.removeEventListener('ended', onEnded);
-  }, [next, repeatMode, currentTrack, duration]);
-
-  const seek = useCallback((time: number) => {
-    if (currentTrack?.sourceType === 'youtube') {
-      if (ytPlayerRef.current) ytPlayerRef.current.seekTo(time, true);
-      setCurrentTime(time);
-    } else {
-      audioEngine.audio.currentTime = time;
-      setCurrentTime(time);
-    }
-  }, [currentTrack]);
+  }, [next, repeatMode, currentTrack, duration, isListenerMode]);
 
   const setVolume = useCallback((val: number) => setVolumeState(Math.max(0, Math.min(1, val))), []);
   const toggleMute = useCallback(() => setIsMuted(prev => !prev), []);
@@ -656,6 +667,8 @@ export const PlayerProvider = ({ children }: { children: ReactNode }) => {
         loudnessEnabled,
         setLoudnessEnabled,
         webAudioSupported,
+        isListenerMode,
+        setIsListenerMode,
         addToQueue,
         playNext,
         removeFromQueue,
@@ -703,7 +716,7 @@ export const PlayerProvider = ({ children }: { children: ReactNode }) => {
               if (repeatMode === 'one') {
                 e.target.seekTo(0);
                 e.target.playVideo();
-              } else {
+              } else if (!isListenerMode) {
                 next();
               }
             } else if (e.data === 3) {

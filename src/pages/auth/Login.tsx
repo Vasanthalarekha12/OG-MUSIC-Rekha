@@ -17,8 +17,10 @@ export const Login: React.FC = () => {
   const [googleLoading, setGoogleLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Return to previous route or default to /home
-  const from = (location.state as any)?.from?.pathname || '/home';
+  // Return to previous route (such as /friends/invite/:token) or default to /friends
+  const from = typeof (location.state as any)?.from === 'string'
+    ? (location.state as any).from
+    : (location.state as any)?.from?.pathname || '/friends';
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -332,6 +334,7 @@ export const Login: React.FC = () => {
         Don't have an account yet?{' '}
         <Link
           to="/register"
+          state={location.state}
           style={{
             color: '#FFFFFF',
             fontWeight: 700,

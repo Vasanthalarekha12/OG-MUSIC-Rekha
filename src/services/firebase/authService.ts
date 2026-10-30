@@ -250,15 +250,7 @@ export const authService = {
   // Google Sign-In with popup and redirect fallback
   async signInWithGoogle(): Promise<User> {
     if (!auth) {
-      const googleUser: User = {
-        id: 'usr_google_' + Math.random().toString(36).substring(2, 9),
-        email: 'google.listener@gmail.com',
-        displayName: 'Google Listener',
-        photoURL: 'https://api.dicebear.com/7.x/bottts/svg?seed=google'
-      };
-      localStorage.setItem(DEV_CURRENT_USER_KEY, JSON.stringify(googleUser));
-      notifyDevListeners(googleUser);
-      return googleUser;
+      throw new Error('Google Sign-In requires Firebase authentication to be configured in Vercel. Please sign in with email and password or configure Firebase credentials.');
     }
 
     const provider = new GoogleAuthProvider();

@@ -64,9 +64,15 @@ export const FriendsProvider = ({ children }: { children: ReactNode }) => {
     playing: boolean;
     pos: number;
     time: number;
-  }>({ trackId: null, playing: false, pos: 0, time: 0 });
+    queueIndex: number;
+  }>({ trackId: null, playing: false, pos: 0, time: 0, queueIndex: -1 });
 
   const isApplyingRemoteSyncRef = useRef(false);
+
+  // Sync listener mode to player to prevent independent queue progression
+  useEffect(() => {
+    player.setIsListenerMode(isListener);
+  }, [isListener, player]);
 
   // 1. Restore active room from localStorage on mount / user change
   useEffect(() => {
@@ -159,27 +165,35 @@ export const FriendsProvider = ({ children }: { children: ReactNode }) => {
 
     const currentTrackId = player.currentTrack?.id || null;
     const isPlaying = player.isPlaying;
-    const pos = Math.floor(player.currentTime);
+    const pos = player.currentTime;
+    const qIndex = player.queueIndex;
     const now = Date.now();
 
     const trackChanged = currentTrackId !== lastBroadcastRef.current.trackId;
     const playStateChanged = isPlaying !== lastBroadcastRef.current.playing;
-    const posChanged = Math.abs(pos - lastBroadcastRef.current.pos) > 2;
+    const queueIndexChanged = qIndex !== lastBroadcastRef.current.queueIndex;
 
-    if (trackChanged || playStateChanged || (posChanged && (now - lastBroadcastRef.current.time > 1500))) {
+    // Detect seek jumps (deviation from continuous linear timeline)
+    const expectedLinearPos = lastBroadcastRef.current.playing
+      ? lastBroadcastRef.current.pos + (now - lastBroadcastRef.current.time) / 1000
+      : lastBroadcastRef.current.pos;
+    const isSeekJump = Math.abs(pos - expectedLinearPos) > 3;
+
+    if (trackChanged || playStateChanged || queueIndexChanged || isSeekJump) {
       lastBroadcastRef.current = {
         trackId: currentTrackId,
         playing: isPlaying,
         pos,
         time: now,
+        queueIndex: qIndex,
       };
 
       friendsService.updatePlaybackState(activeRoom.id, user!.id, {
         currentTrack: player.currentTrack,
         playbackState: isPlaying ? 'playing' : 'paused',
-        basePosition: player.currentTime,
+        basePosition: pos,
         queue: player.queue,
-        queueIndex: player.queueIndex,
+        queueIndex: qIndex,
       }).catch(err => {
         console.warn('Playback broadcast error:', err);
       });
@@ -204,7 +218,7 @@ export const FriendsProvider = ({ children }: { children: ReactNode }) => {
     const basePos = activeRoom.basePosition;
     const baseTs = activeRoom.baseTimestamp;
 
-    // Calculate authoritative position
+    // Calculate authoritative expected position
     const elapsed = remotePlayState === 'playing' ? (Date.now() - baseTs) / 1000 : 0;
     const expectedPos = Math.max(0, basePos + elapsed);
 
@@ -219,7 +233,9 @@ export const FriendsProvider = ({ children }: { children: ReactNode }) => {
         if (remotePlayState === 'paused') {
           player.pause();
         }
-        isApplyingRemoteSyncRef.current = false;
+        setTimeout(() => {
+          isApplyingRemoteSyncRef.current = false;
+        }, 300);
       }, 500);
       return;
     }
@@ -235,7 +251,7 @@ export const FriendsProvider = ({ children }: { children: ReactNode }) => {
       setTimeout(() => { isApplyingRemoteSyncRef.current = false; }, 200);
     }
 
-    // Drift reconciliation
+    // Controlled drift reconciliation (do not hard-seek within 2.5s window)
     const drift = Math.abs(player.currentTime - expectedPos);
     setSyncDrift(Math.round(drift * 10) / 10);
     setIsSynced(drift < 2.5);
@@ -311,28 +327,56 @@ export const FriendsProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const inviteLink = activeInvitation
-    ? `${window.location.origin}/friends?invite=${encodeURIComponent(activeInvitation.id)}`
-    : (user ? `${window.location.origin}/friends?host=${encodeURIComponent(user.id)}` : '');
+    ? `${window.location.origin}/friends/invite/${encodeURIComponent(activeInvitation.id)}`
+    : '';
 
   const copyInviteLink = async (): Promise<boolean> => {
     try {
-      let linkToCopy = inviteLink;
-      if (!activeInvitation && user) {
+      let targetToken = activeInvitation?.id;
+      if (!targetToken && user) {
         const newInv = await generateNewInvite();
-        linkToCopy = `${window.location.origin}/friends?invite=${encodeURIComponent(newInv.id)}`;
+        targetToken = newInv.id;
       }
-      if (typeof navigator !== 'undefined' && navigator.clipboard) {
-        await navigator.clipboard.writeText(linkToCopy);
-        return true;
+      if (!targetToken) return false;
+
+      const linkToCopy = `${window.location.origin}/friends/invite/${encodeURIComponent(targetToken)}`;
+
+      if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
+        try {
+          await navigator.clipboard.writeText(linkToCopy);
+          return true;
+        } catch {
+          // Fall through to textarea fallback
+        }
       }
-      return false;
+
+      // Safe fallback for older browsers or non-secure contexts
+      const textArea = document.createElement('textarea');
+      textArea.value = linkToCopy;
+      textArea.style.position = 'fixed';
+      textArea.style.opacity = '0';
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      const successful = document.execCommand('copy');
+      document.body.removeChild(textArea);
+      return successful;
     } catch {
       return false;
     }
   };
 
-  const shareOnWhatsApp = () => {
-    const link = inviteLink || `${window.location.origin}/friends`;
+  const shareOnWhatsApp = async () => {
+    let targetToken = activeInvitation?.id;
+    if (!targetToken && user) {
+      try {
+        const newInv = await generateNewInvite();
+        targetToken = newInv.id;
+      } catch {}
+    }
+    const link = targetToken
+      ? `${window.location.origin}/friends/invite/${encodeURIComponent(targetToken)}`
+      : `${window.location.origin}/friends`;
     const hostName = user?.displayName || 'Your friend';
     const message = `Hey! Join ${hostName} on OG MUSIC and let's listen to music together in real-time. Open this invitation: ${link}`;
     const url = `https://wa.me/?text=${encodeURIComponent(message)}`;

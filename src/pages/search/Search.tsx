@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
+import { Search as SearchIcon, X as ClearIcon } from 'lucide-react';
 import { mockGenres } from '../../constants/mockData';
 import { TrackRow } from '../../components/music/TrackRow';
 import { SectionHeader } from '../../components/ui/SectionHeader';
@@ -13,6 +14,10 @@ export const Search = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const query = searchParams.get('q') || '';
+  const focusParam = searchParams.get('focus') === 'true';
+  const [localQuery, setLocalQuery] = useState(query);
+  const inputRef = useRef<HTMLInputElement>(null);
+
   const [activeTab, setActiveTab] = useState<'ALL' | 'SONGS' | 'ARTISTS' | 'ALBUMS' | 'PLAYLISTS' | 'YOUTUBE'>('ALL');
   const { playList } = usePlayer();
   const ytSearch = useYouTubeSearch(query);
@@ -36,6 +41,7 @@ export const Search = () => {
   };
 
   const handleTagClick = (tag: string) => {
+    setLocalQuery(tag);
     setSearchParams({ q: tag });
   };
 
@@ -51,6 +57,55 @@ export const Search = () => {
       localStorage.setItem('og_music_recent_searches', JSON.stringify(updated));
       return updated;
     });
+  };
+
+  // Sync external search param changes (e.g. tag clicks, header search, navigation)
+  useEffect(() => {
+    setLocalQuery(query);
+  }, [query]);
+
+  // Autofocus when navigated with ?focus=true
+  useEffect(() => {
+    if (focusParam && inputRef.current) {
+      inputRef.current.focus();
+    }
+  }, [focusParam]);
+
+  // Debounced URL sync when user types directly in the input
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const trimmed = localQuery.trim();
+      if (trimmed !== query) {
+        if (trimmed) {
+          setSearchParams({ q: trimmed }, { replace: true });
+        } else if (query) {
+          setSearchParams({}, { replace: true });
+        }
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [localQuery, query, setSearchParams]);
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setLocalQuery(e.target.value);
+  };
+
+  const handleInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      const trimmed = localQuery.trim();
+      if (trimmed) {
+        setSearchParams({ q: trimmed }, { replace: true });
+        saveRecentSearch(trimmed);
+      }
+    }
+  };
+
+  const handleClear = () => {
+    setLocalQuery('');
+    setSearchParams({}, { replace: true });
+    if (inputRef.current) {
+      inputRef.current.focus();
+    }
   };
 
   useEffect(() => {
@@ -90,11 +145,92 @@ export const Search = () => {
 
   return (
     <div style={{ paddingBottom: '32px' }}>
-      <div style={{ marginBottom: '32px' }}>
+      <div style={{ marginBottom: '24px' }}>
         <h1 style={{ fontSize: 'var(--text-4xl)', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '8px', letterSpacing: '-0.5px' }}>
           Search
         </h1>
         <p style={{ color: 'var(--text-secondary)', fontSize: 'var(--text-lg)' }}>Find your favorite songs, artists, and soundtrack albums.</p>
+      </div>
+
+      {/* Editable search input bar for mobile and desktop */}
+      <div style={{ position: 'relative', width: '100%', maxWidth: '640px', marginBottom: '28px' }}>
+        <div
+          style={{
+            position: 'absolute',
+            left: '16px',
+            top: '50%',
+            transform: 'translateY(-50%)',
+            display: 'flex',
+            alignItems: 'center',
+            pointerEvents: 'none',
+            color: 'var(--brand-red, #ff1616)',
+            zIndex: 1
+          }}
+        >
+          <SearchIcon size={20} />
+        </div>
+        <input
+          id="search-page-input"
+          ref={inputRef}
+          type="search"
+          inputMode="search"
+          enterKeyHint="search"
+          autoComplete="off"
+          autoCorrect="off"
+          spellCheck={false}
+          value={localQuery}
+          onChange={handleInputChange}
+          onKeyDown={handleInputKeyDown}
+          placeholder="Search songs, artists, albums..."
+          aria-label="Search songs, artists, and soundtrack albums"
+          style={{
+            width: '100%',
+            backgroundColor: 'var(--surface-elevated, #161618)',
+            border: '1px solid var(--border, rgba(255, 255, 255, 0.12))',
+            borderRadius: 'var(--radius-full, 9999px)',
+            padding: '14px 44px 14px 48px',
+            color: 'var(--text-primary, #ffffff)',
+            fontSize: '16px', /* 16px prevents iOS Safari from auto-zooming viewport */
+            outline: 'none',
+            boxSizing: 'border-box',
+            transition: 'border-color 0.2s ease, box-shadow 0.2s ease',
+            WebkitAppearance: 'none'
+          }}
+          onFocus={(e) => {
+            e.target.style.borderColor = 'var(--brand-red, #dc2626)';
+            e.target.style.boxShadow = '0 0 0 3px rgba(220, 38, 38, 0.25)';
+          }}
+          onBlur={(e) => {
+            e.target.style.borderColor = 'var(--border, rgba(255, 255, 255, 0.12))';
+            e.target.style.boxShadow = 'none';
+          }}
+        />
+        {localQuery && (
+          <button
+            type="button"
+            onClick={handleClear}
+            aria-label="Clear search input"
+            style={{
+              position: 'absolute',
+              right: '14px',
+              top: '50%',
+              transform: 'translateY(-50%)',
+              background: 'rgba(255, 255, 255, 0.12)',
+              border: 'none',
+              borderRadius: '50%',
+              width: '24px',
+              height: '24px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'var(--text-secondary, #a1a1a1)',
+              cursor: 'pointer',
+              padding: 0
+            }}
+          >
+            <ClearIcon size={14} />
+          </button>
+        )}
       </div>
 
       <div style={{ width: '100%', alignSelf: 'flex-start' }}>

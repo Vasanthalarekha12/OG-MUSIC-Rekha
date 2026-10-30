@@ -61,6 +61,9 @@ export class FriendsService {
     const now = Date.now();
     const expiresAt = now + 7 * 24 * 60 * 60 * 1000; // 7 days
 
+    // Ensure the listening room exists before generating invitation
+    await this.createOrGetRoom(host, roomTitle);
+
     const invitation: RoomInvitation = {
       id: inviteToken,
       roomId,
@@ -228,29 +231,31 @@ export class FriendsService {
     }
 
     if (accept) {
-      // 2. Add as participant to the room
-      const room = await this.getRoom(request.roomId);
-      if (room) {
-        const participant: RoomParticipant = {
-          id: request.userId,
-          displayName: request.userDisplayName,
-          email: request.userEmail,
-          photoURL: request.userPhotoURL,
-          role: 'listener',
-          joinedAt: now,
-          lastHeartbeat: now,
-        };
-        const updatedParticipants = {
-          ...room.participants,
-          [request.userId]: participant,
-        };
-
-        await this.saveRoom({
-          ...room,
-          participants: updatedParticipants,
-          updatedAt: now,
-        });
+      // 2. Add as participant to the room (creating room on demand if not yet active)
+      let room = await this.getRoom(request.roomId);
+      if (!room) {
+        room = await this.createOrGetRoom(host);
       }
+
+      const participant: RoomParticipant = {
+        id: request.userId,
+        displayName: request.userDisplayName,
+        email: request.userEmail,
+        photoURL: request.userPhotoURL,
+        role: 'listener',
+        joinedAt: now,
+        lastHeartbeat: now,
+      };
+      const updatedParticipants = {
+        ...room.participants,
+        [request.userId]: participant,
+      };
+
+      await this.saveRoom({
+        ...room,
+        participants: updatedParticipants,
+        updatedAt: now,
+      });
 
       // 3. Establish permanent Friendship
       await this.createFriendship(host, {
@@ -320,6 +325,8 @@ export class FriendsService {
           } else {
             callback(null);
           }
+        }, (err) => {
+          console.warn('Firestore my request subscription fallback:', err);
         });
       } catch {}
     }
@@ -630,6 +637,8 @@ export class FriendsService {
           } else {
             callback(null);
           }
+        }, (err) => {
+          console.warn('Firestore room subscription fallback:', err);
         });
       } catch {}
     }

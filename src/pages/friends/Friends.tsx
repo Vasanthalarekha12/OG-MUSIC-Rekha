@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
 import {
   Users,
   Radio,
@@ -20,14 +20,17 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useFriends } from '../../contexts/FriendsContext';
+import { usePlayer } from '../../contexts/PlayerContext';
 import { friendsService } from '../../services/friends/friendsService';
 import type { RoomInvitation } from '../../types/friends';
 import './Friends.css';
 
 export const Friends = () => {
+  const { token } = useParams<{ token?: string }>();
   const [searchParams] = useSearchParams();
-  const inviteToken = searchParams.get('invite');
+  const inviteToken = token || searchParams.get('invite');
   const navigate = useNavigate();
+  const player = usePlayer();
 
   const { user } = useAuth();
   const {
@@ -60,7 +63,7 @@ export const Friends = () => {
   const [guestInvite, setGuestInvite] = useState<RoomInvitation | null>(null);
   const [inviteError, setInviteError] = useState<string | null>(null);
 
-  // If there's an incoming ?invite= query parameter, resolve the invitation
+  // If there's an incoming route parameter or ?invite= query parameter, resolve the invitation
   useEffect(() => {
     if (!inviteToken) {
       setGuestInvite(null);
@@ -109,6 +112,10 @@ export const Friends = () => {
 
   // If user is not logged in:
   if (!user) {
+    const returnPath = inviteToken
+      ? `/friends/invite/${encodeURIComponent(inviteToken)}`
+      : '/friends';
+
     return (
       <div className="friends-page-container">
         <div className="friends-hero-banner">
@@ -129,16 +136,16 @@ export const Friends = () => {
           </h2>
           <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
             {guestInvite
-              ? `You received an invitation to join ${guestInvite.roomTitle}. Sign in to send your request.`
+              ? `You received an invitation to join "${guestInvite.roomTitle}" hosted by ${guestInvite.hostName}. Sign in to send your request.`
               : 'Create listening rooms, share synchronized audio sessions, and invite friends via WhatsApp.'}
           </p>
           <button
             type="button"
             className="og-btn-primary"
             style={{ width: '100%', marginTop: '8px' }}
-            onClick={() => navigate('/login', { state: { from: inviteToken ? `/friends?invite=${inviteToken}` : '/friends' } })}
+            onClick={() => navigate('/login', { state: { from: returnPath } })}
           >
-            Sign In with OG Account
+            Sign In to Join Room
           </button>
         </div>
       </div>
@@ -309,9 +316,21 @@ export const Friends = () => {
                         <Crown size={14} /> HOST CONTROLLER
                       </span>
                     ) : (
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '0.82rem', fontWeight: 700, color: '#38bdf8', background: 'rgba(56,189,248,0.15)', padding: '4px 10px', borderRadius: '8px', whiteSpace: 'nowrap' }}>
-                        <Headphones size={14} /> LISTENER ({isSynced ? 'SYNCED' : `DRIFT ±${syncDrift}s`})
-                      </span>
+                      <>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '0.82rem', fontWeight: 700, color: '#38bdf8', background: 'rgba(56,189,248,0.15)', padding: '4px 10px', borderRadius: '8px', whiteSpace: 'nowrap' }}>
+                          <Headphones size={14} /> LISTENER ({isSynced ? 'SYNCED' : `DRIFT ±${syncDrift}s`})
+                        </span>
+                        {!player.isPlaying && activeRoom.playbackState === 'playing' && (
+                          <button
+                            type="button"
+                            className="og-btn-primary hover-lift"
+                            style={{ padding: '4px 10px', fontSize: '0.78rem' }}
+                            onClick={() => player.play()}
+                          >
+                            <Volume2 size={13} /> Tap to Sync Audio
+                          </button>
+                        )}
+                      </>
                     )}
                   </div>
 

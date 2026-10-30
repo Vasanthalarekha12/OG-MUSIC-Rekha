@@ -26,12 +26,6 @@ import { PlaceholderPage } from './components/ui/PlaceholderPage';
 import { AdminLayout } from './components/layout/AdminLayout';
 import { LoaderPreview } from './pages/preview/LoaderPreview';
 import { Friends } from './pages/friends/Friends';
-import { useParams } from 'react-router-dom';
-
-const InviteRedirect = () => {
-  const { token } = useParams();
-  return <Navigate to={`/friends?invite=${encodeURIComponent(token || '')}`} replace />;
-};
 
 export const router = createBrowserRouter([
   { path: '/loader-preview', element: <LoaderPreview /> },
@@ -56,7 +50,7 @@ export const router = createBrowserRouter([
   { path: '/playlists', element: <AppShell><Playlists /></AppShell> },
   { path: '/playlist/:id', element: <AppShell><PlaylistDetails /></AppShell> },
   { path: '/friends', element: <AppShell><Friends /></AppShell> },
-  { path: '/friends/invite/:token', element: <AppShell><InviteRedirect /></AppShell> },
+  { path: '/friends/invite/:token', element: <AppShell><Friends /></AppShell> },
   { path: '/favorites', element: <AppShell><Favorites /></AppShell> },
   { path: '/history', element: <AppShell><History /></AppShell> },
   { path: '/most-played', element: <AppShell><MostPlayed /></AppShell> },

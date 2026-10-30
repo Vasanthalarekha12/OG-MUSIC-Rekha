@@ -93,7 +93,14 @@ export const MobileHeader = ({ onMenuClick }: MobileHeaderProps) => {
         </button>
 
         <button 
-          onClick={() => navigate('/search')}
+          onClick={() => {
+            const el = document.getElementById('search-page-input');
+            if (el) {
+              el.focus();
+            } else {
+              navigate('/search?focus=true');
+            }
+          }}
           aria-label="Search Songs, Artists, and Soundtracks"
           style={{ 
             color: 'var(--text-primary)',

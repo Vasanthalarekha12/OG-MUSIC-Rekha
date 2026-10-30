@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { AuthLayout } from './AuthLayout';
 import { useAuth } from '../../contexts/AuthContext';
 import { getAuthErrorMessage } from '../../services/firebase/authService';
@@ -7,6 +7,7 @@ import { Mail, Lock, User as UserIcon, Eye, EyeOff, AlertCircle, Loader2 } from 
 
 export const Register: React.FC = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const { register, loginWithGoogle } = useAuth();
 
   const [displayName, setDisplayName] = useState('');
@@ -17,6 +18,11 @@ export const Register: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Return to previous route (such as /friends/invite/:token) or default to /friends
+  const from = typeof (location.state as any)?.from === 'string'
+    ? (location.state as any).from
+    : (location.state as any)?.from?.pathname || '/friends';
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -40,7 +46,7 @@ export const Register: React.FC = () => {
     try {
       setLoading(true);
       await register(email, password, displayName);
-      navigate('/home', { replace: true });
+      navigate(from, { replace: true });
     } catch (err) {
       setError(getAuthErrorMessage(err));
     } finally {
@@ -53,7 +59,7 @@ export const Register: React.FC = () => {
     try {
       setGoogleLoading(true);
       await loginWithGoogle();
-      navigate('/home', { replace: true });
+      navigate(from, { replace: true });
     } catch (err: any) {
       setError(getAuthErrorMessage(err));
     } finally {
@@ -439,6 +445,7 @@ export const Register: React.FC = () => {
         Already have an account?{' '}
         <Link
           to="/login"
+          state={location.state}
           style={{
             color: '#FFFFFF',
             fontWeight: 700,
