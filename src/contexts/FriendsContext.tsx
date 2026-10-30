@@ -158,7 +158,27 @@ export const FriendsProvider = ({ children }: { children: ReactNode }) => {
 
   // 5. HOST BROADCASTER: When host changes song or play/pause/seek, update the room
   useEffect(() => {
-    if (!isHost || !activeRoom) return;
+    if (!isHost || !activeRoom || !user) {
+      player.setOnPlaybackBroadcast(null);
+      return;
+    }
+
+    // Direct imperative action broadcast hook
+    player.setOnPlaybackBroadcast((cmd) => {
+      if (isApplyingRemoteSyncRef.current) return;
+      friendsService.updatePlaybackState(activeRoom.id, user.id, {
+        currentTrack: cmd.track,
+        playbackState: cmd.type === 'PAUSE' ? 'paused' : 'playing',
+        basePosition: cmd.position,
+        queue: cmd.queue,
+        queueIndex: cmd.queueIndex,
+        shuffleEnabled: cmd.shuffle,
+        repeatMode: cmd.repeat,
+        lastCommandId: `${cmd.type}_${Date.now()}`
+      }).catch(err => {
+        console.warn('Playback broadcast hook error:', err);
+      });
+    });
 
     // Avoid broadcasting state updates that originated from remote sync
     if (isApplyingRemoteSyncRef.current) return;
@@ -188,16 +208,23 @@ export const FriendsProvider = ({ children }: { children: ReactNode }) => {
         queueIndex: qIndex,
       };
 
-      friendsService.updatePlaybackState(activeRoom.id, user!.id, {
+      friendsService.updatePlaybackState(activeRoom.id, user.id, {
         currentTrack: player.currentTrack,
         playbackState: isPlaying ? 'playing' : 'paused',
         basePosition: pos,
         queue: player.queue,
         queueIndex: qIndex,
+        shuffleEnabled: player.isShuffle,
+        repeatMode: player.repeatMode,
+        lastCommandId: `auto_${now}`
       }).catch(err => {
         console.warn('Playback broadcast error:', err);
       });
     }
+
+    return () => {
+      player.setOnPlaybackBroadcast(null);
+    };
   }, [
     isHost,
     activeRoom?.id,
@@ -206,6 +233,9 @@ export const FriendsProvider = ({ children }: { children: ReactNode }) => {
     player.currentTime,
     player.queue,
     player.queueIndex,
+    player.isShuffle,
+    player.repeatMode,
+    player.setOnPlaybackBroadcast,
     user
   ]);
 
@@ -408,8 +438,12 @@ export const FriendsProvider = ({ children }: { children: ReactNode }) => {
       if (updatedReq?.status === 'accepted') {
         setJoinRequestStatus('accepted');
         unsub();
-        // Load the room
-        const room = await friendsService.getRoom(invite.roomId);
+        // Load the room with retry to ensure host write propagation
+        let room = await friendsService.getRoom(invite.roomId);
+        if (!room) {
+          await new Promise(r => setTimeout(r, 400));
+          room = await friendsService.getRoom(invite.roomId);
+        }
         if (room && room.status === 'active') {
           setActiveRoom(room);
           localStorage.setItem(ACTIVE_ROOM_KEY, room.id);

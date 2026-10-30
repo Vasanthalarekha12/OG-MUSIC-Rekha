@@ -223,6 +223,14 @@ export class FriendsService {
       throw new Error(`This invitation is ${invite.status}. Please ask the host for a new link.`);
     }
 
+    // Enforce 10-member total room capacity
+    const room = await this.getRoom(invite.roomId);
+    const maxCap = room?.maxCapacity || 10;
+    const memberCount = room ? Object.keys(room.participants || {}).length : 1;
+    if (memberCount >= maxCap) {
+      throw new Error(`This listening room is full (${maxCap}/${maxCap} members). Cannot send request.`);
+    }
+
     const requestId = `${invite.roomId}_${user.id}`;
     const now = Date.now();
     const request: RoomJoinRequest = {
@@ -307,6 +315,12 @@ export class FriendsService {
         room = await this.createOrGetRoom(host);
       }
 
+      const maxCap = room.maxCapacity || 10;
+      const currentCount = Object.keys(room.participants || {}).length;
+      if (currentCount >= maxCap) {
+        throw new Error(`This room is at maximum capacity of ${maxCap} members.`);
+      }
+
       const participant: RoomParticipant = {
         id: request.userId,
         displayName: request.userDisplayName,
@@ -324,6 +338,7 @@ export class FriendsService {
       await this.saveRoom({
         ...room,
         participants: updatedParticipants,
+        memberUids: Object.keys(updatedParticipants),
         updatedAt: now,
       });
 
@@ -670,6 +685,10 @@ export class FriendsService {
       participants: {
         [host.id]: hostParticipant,
       },
+      memberUids: [host.id],
+      maxCapacity: 10,
+      shuffleEnabled: false,
+      repeatMode: 'off',
       createdAt: now,
       updatedAt: now,
     };
@@ -687,6 +706,9 @@ export class FriendsService {
       basePosition?: number;
       queue?: QueueItem[];
       queueIndex?: number;
+      shuffleEnabled?: boolean;
+      repeatMode?: 'off' | 'all' | 'one';
+      lastCommandId?: string;
     }
   ): Promise<void> {
     const room = await this.getRoom(roomId);
@@ -696,15 +718,24 @@ export class FriendsService {
     }
 
     const now = Date.now();
+    const currentTrack = update.currentTrack !== undefined ? update.currentTrack : room.currentTrack;
     const updatedRoom: ListeningRoom = {
       ...room,
-      currentTrack: update.currentTrack !== undefined ? update.currentTrack : room.currentTrack,
+      currentTrack,
+      trackId: currentTrack?.id,
+      providerId: currentTrack?.sourceType,
+      trackTitle: currentTrack?.title,
+      artistName: currentTrack?.artistName,
+      albumId: currentTrack?.albumId,
       playbackState: update.playbackState !== undefined ? update.playbackState : room.playbackState,
       basePosition: update.basePosition !== undefined ? update.basePosition : room.basePosition,
       baseTimestamp: now,
       stateVersion: (room.stateVersion || 0) + 1,
       queue: update.queue !== undefined ? update.queue : room.queue,
       queueIndex: update.queueIndex !== undefined ? update.queueIndex : room.queueIndex,
+      shuffleEnabled: update.shuffleEnabled !== undefined ? update.shuffleEnabled : room.shuffleEnabled,
+      repeatMode: update.repeatMode !== undefined ? update.repeatMode : room.repeatMode,
+      lastCommandId: update.lastCommandId || `cmd_${now}`,
       updatedAt: now,
     };
 

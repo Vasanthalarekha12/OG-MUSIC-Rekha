@@ -25,6 +25,16 @@ export interface ListeningRoom {
   queue: QueueItem[];
   queueIndex: number;
   participants: Record<string, RoomParticipant>;
+  memberUids?: string[];
+  trackId?: string;
+  providerId?: string;
+  trackTitle?: string;
+  artistName?: string;
+  albumId?: string;
+  shuffleEnabled?: boolean;
+  repeatMode?: 'off' | 'all' | 'one';
+  lastCommandId?: string;
+  maxCapacity?: number; // Default 10
   createdAt: number;
   updatedAt: number;
 }

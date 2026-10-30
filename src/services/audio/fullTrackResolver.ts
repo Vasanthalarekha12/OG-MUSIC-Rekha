@@ -48,6 +48,12 @@ const POPULAR_FULL_TRACK_CATALOG: Record<string, string> = {
   'arjan vailly': 'zqGW6x_5N0k',
   'satranga': 'zqGW6x_5N0k',
 
+  // Hangover (Salman Khan / Kick) & Hangova (DC / Anirudh)
+  'hangover': '1gqBb4Y7LJA',
+  'hangover full song': '1gqBb4Y7LJA',
+  'hangover kick': '1gqBb4Y7LJA',
+  'hangova': '8fYBnwVEdx8',
+
   // Dear Comrade & Sid Sriram hits
   'kadalalle': '2ySr4lR0XFg',
   'dear comrade': '2ySr4lR0XFg',

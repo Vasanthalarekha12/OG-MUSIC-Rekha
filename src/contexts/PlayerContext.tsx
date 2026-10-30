@@ -11,6 +11,16 @@ import { audioEngine } from '../audio/AudioEngine';
 import { musicDiscoveryService } from '../services/musicDiscoveryService';
 import { fullTrackResolver } from '../services/audio/fullTrackResolver';
 
+export interface PlaybackBroadcastEvent {
+  type: 'PLAY' | 'PAUSE' | 'SEEK' | 'TRACK_CHANGE' | 'QUEUE_CHANGE';
+  track: Song | null;
+  position: number;
+  queue: QueueItem[];
+  queueIndex: number;
+  shuffle?: boolean;
+  repeat?: 'off' | 'all' | 'one';
+}
+
 interface PlayerContextType {
   currentTrack: Song | null;
   currentContext: DiscoveryContext | null;
@@ -49,6 +59,7 @@ interface PlayerContextType {
   webAudioSupported: boolean;
   isListenerMode: boolean;
   setIsListenerMode: (enabled: boolean) => void;
+  setOnPlaybackBroadcast: (callback: ((event: PlaybackBroadcastEvent) => void) | null) => void;
   addToQueue: (song: Song) => void;
   playNext: (song: Song) => void;
   removeFromQueue: (id: string) => void;
@@ -110,6 +121,11 @@ export const PlayerProvider = ({ children }: { children: ReactNode }) => {
 
   const ytPlayerRef = useRef<YouTubePlayer | null>(null);
   const recordedTrackIdRef = useRef<string | null>(null);
+  const broadcastCallbackRef = useRef<((event: PlaybackBroadcastEvent) => void) | null>(null);
+
+  const setOnPlaybackBroadcast = useCallback((callback: ((event: PlaybackBroadcastEvent) => void) | null) => {
+    broadcastCallbackRef.current = callback;
+  }, []);
 
   // Initialize Audio Engine
   useEffect(() => {
@@ -517,7 +533,18 @@ export const PlayerProvider = ({ children }: { children: ReactNode }) => {
       audioEngine.audio.currentTime = time;
       setCurrentTime(time);
     }
-  }, [currentTrack]);
+    if (!isListenerMode && broadcastCallbackRef.current) {
+      broadcastCallbackRef.current({
+        type: 'SEEK',
+        track: currentTrack,
+        position: time,
+        queue,
+        queueIndex,
+        shuffle: isShuffle,
+        repeat: repeatMode
+      });
+    }
+  }, [currentTrack, isListenerMode, queue, queueIndex, isShuffle, repeatMode]);
 
   const previous = useCallback(() => {
     if (isListenerMode) {
@@ -669,6 +696,7 @@ export const PlayerProvider = ({ children }: { children: ReactNode }) => {
         webAudioSupported,
         isListenerMode,
         setIsListenerMode,
+        setOnPlaybackBroadcast,
         addToQueue,
         playNext,
         removeFromQueue,
@@ -680,7 +708,7 @@ export const PlayerProvider = ({ children }: { children: ReactNode }) => {
       }}
     >
       {/* Background YouTube Audio Stream Engine */}
-      <div style={{ position: 'fixed', left: '-9999px', top: '-9999px', width: '200px', height: '200px', pointerEvents: 'none', zIndex: -100 }}>
+      <div style={{ position: 'fixed', bottom: 0, right: 0, width: '200px', height: '150px', opacity: 0.001, pointerEvents: 'none', zIndex: -1 }}>
         <YouTube
           videoId={
             (currentTrack?.youtubeId && /^[a-zA-Z0-9_-]{11}$/.test(currentTrack.youtubeId))

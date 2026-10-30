@@ -158,8 +158,19 @@ export const Friends = () => {
     );
   }
 
+  // Automatically navigate into the room as soon as admission is approved
+  useEffect(() => {
+    if (joinRequestStatus === 'accepted' || (activeRoom && guestInvite && activeRoom.id === guestInvite.roomId)) {
+      setGuestInvite(null);
+      setActiveTab('room');
+      if (token) {
+        navigate('/friends', { replace: true });
+      }
+    }
+  }, [joinRequestStatus, activeRoom, guestInvite, token, navigate]);
+
   // If viewing an invitation as a guest user:
-  if (guestInvite && (!activeRoom || activeRoom.id !== guestInvite.roomId)) {
+  if (guestInvite && joinRequestStatus !== 'accepted' && (!activeRoom || activeRoom.id !== guestInvite.roomId)) {
     const isHostOfInvite = guestInvite.hostId === user.id;
 
     return (
@@ -226,12 +237,6 @@ export const Friends = () => {
                 <div style={{ padding: '14px', background: 'rgba(239,68,68,0.12)', borderRadius: '12px', color: '#f87171' }}>
                   <p style={{ margin: 0, fontWeight: 600 }}>Admission Request Declined</p>
                   <span style={{ fontSize: '0.82rem' }}>The host declined your request to join this session.</span>
-                </div>
-              )}
-
-              {joinRequestStatus === 'accepted' && (
-                <div style={{ padding: '14px', background: 'rgba(34,197,94,0.12)', borderRadius: '12px', color: '#4ade80' }}>
-                  <p style={{ margin: 0, fontWeight: 600 }}>Approved! Joining room...</p>
                 </div>
               )}
             </div>
@@ -383,36 +388,55 @@ export const Friends = () => {
 
                 {/* Participants */}
                 <div>
-                  <span style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', fontWeight: 700, display: 'block', marginBottom: '8px' }}>
-                    Participants ({Object.keys(activeRoom.participants).length})
-                  </span>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px', flexWrap: 'wrap', gap: '4px' }}>
+                    <span style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', fontWeight: 700 }}>
+                      Participants ({Object.keys(activeRoom.participants).length} / {activeRoom.maxCapacity || 10})
+                    </span>
+                    <span style={{ fontSize: '0.75rem', color: '#4ade80', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                      <span className="status-pulse-dot" style={{ width: '6px', height: '6px', background: '#4ade80' }} />
+                      {Object.values(activeRoom.participants).filter(p => Date.now() - (p.lastHeartbeat || 0) < 30000).length} Online
+                    </span>
+                  </div>
                   <div className="participants-grid">
-                    {Object.values(activeRoom.participants).map((p) => (
-                      <div key={p.id} className="participant-chip">
-                        <div className="participant-left">
-                          <div className="participant-avatar">
-                            {p.displayName ? p.displayName.charAt(0).toUpperCase() : 'U'}
+                    {Object.values(activeRoom.participants).map((p) => {
+                      const isOnline = Date.now() - (p.lastHeartbeat || 0) < 30000;
+                      return (
+                        <div key={p.id} className="participant-chip">
+                          <div className="participant-left">
+                            <div className="participant-avatar" style={{ position: 'relative' }}>
+                              {p.displayName ? p.displayName.charAt(0).toUpperCase() : 'U'}
+                              <span style={{
+                                position: 'absolute',
+                                bottom: '-2px',
+                                right: '-2px',
+                                width: '8px',
+                                height: '8px',
+                                borderRadius: '50%',
+                                background: isOnline ? '#22c55e' : '#64748b',
+                                border: '2px solid #000'
+                              }} />
+                            </div>
+                            <div style={{ minWidth: 0 }}>
+                              <p className="participant-name">{p.displayName || 'OG Listener'}</p>
+                              <span className="participant-role">
+                                {p.role === 'host' ? '👑 Host' : '🎧 Listener'} • {isOnline ? 'Active' : 'Idle'}
+                              </span>
+                            </div>
                           </div>
-                          <div style={{ minWidth: 0 }}>
-                            <p className="participant-name">{p.displayName || 'OG Listener'}</p>
-                            <span className="participant-role">
-                              {p.role === 'host' ? '👑 Host' : '🎧 Listener'}
-                            </span>
-                          </div>
+                          {isHost && p.id !== user.id && (
+                            <button
+                              type="button"
+                              className="hover-lift"
+                              title="Remove participant"
+                              onClick={() => kickParticipant(p.id)}
+                              style={{ background: 'transparent', border: 'none', color: '#f87171', cursor: 'pointer', padding: '4px' }}
+                            >
+                              <Trash2 size={15} />
+                            </button>
+                          )}
                         </div>
-                        {isHost && p.id !== user.id && (
-                          <button
-                            type="button"
-                            className="hover-lift"
-                            title="Remove participant"
-                            onClick={() => kickParticipant(p.id)}
-                            style={{ background: 'transparent', border: 'none', color: '#f87171', cursor: 'pointer', padding: '4px' }}
-                          >
-                            <Trash2 size={15} />
-                          </button>
-                        )}
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               </>
