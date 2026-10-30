@@ -86,7 +86,7 @@ export const ResetPassword: React.FC = () => {
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '40px 0', gap: '16px' }}>
           <Loader2 size={32} className="spin-animation" color="var(--brand-red, #DC2626)" />
           <div style={{ color: 'var(--text-secondary, #A1A1A1)', fontSize: '14px' }}>
-            Verifying reset link with Firebase...
+            Verifying reset link...
           </div>
         </div>
       ) : codeError ? (

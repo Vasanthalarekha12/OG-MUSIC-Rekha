@@ -6,7 +6,7 @@ import { getAuthErrorMessage } from '../../services/firebase/authService';
 import { Mail, CheckCircle2, AlertCircle, Loader2, ArrowLeft } from 'lucide-react';
 
 export const ForgotPassword: React.FC = () => {
-  const { resetPassword, isConfigured } = useAuth();
+  const { resetPassword } = useAuth();
 
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
@@ -36,30 +36,8 @@ export const ForgotPassword: React.FC = () => {
   return (
     <AuthLayout
       title="Password Recovery"
-      subtitle="Enter your email to receive a secure password reset link from Firebase"
+      subtitle="Enter your email to receive a secure password reset link"
     >
-      {/* Firebase configuration warning if missing */}
-      {!isConfigured && (
-        <div
-          style={{
-            backgroundColor: 'rgba(234, 179, 8, 0.1)',
-            border: '1px solid rgba(234, 179, 8, 0.3)',
-            borderRadius: '12px',
-            padding: '12px 16px',
-            marginBottom: '20px',
-            display: 'flex',
-            alignItems: 'flex-start',
-            gap: '12px',
-            fontSize: '13px',
-            color: '#FDE047'
-          }}
-        >
-          <AlertCircle size={18} style={{ flexShrink: 0, marginTop: '2px' }} />
-          <div>
-            <strong>Firebase Setup Notice:</strong> Password reset emails are sent via your Firebase Authentication project configured in <code>.env.local</code>.
-          </div>
-        </div>
-      )}
 
       {/* Success Confirmation State */}
       {submitted ? (
@@ -96,7 +74,7 @@ export const ForgotPassword: React.FC = () => {
               Reset Link Dispatched
             </h3>
             <p style={{ fontSize: '14px', color: 'rgba(255, 255, 255, 0.75)', lineHeight: 1.6, margin: 0 }}>
-              If an account is associated with <strong>{email}</strong>, a secure Firebase password reset email has been sent.
+              If an account is associated with <strong>{email}</strong>, a secure password reset email has been sent.
             </p>
           </div>
 
@@ -190,7 +168,7 @@ export const ForgotPassword: React.FC = () => {
                   type="email"
                   required
                   autoComplete="email"
-                  placeholder="listener@ogmusic.com"
+                  placeholder="name@example.com"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   style={{

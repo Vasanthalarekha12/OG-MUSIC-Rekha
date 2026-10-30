@@ -7,7 +7,7 @@ import { Mail, Lock, User as UserIcon, Eye, EyeOff, AlertCircle, Loader2 } from 
 
 export const Register: React.FC = () => {
   const navigate = useNavigate();
-  const { register, loginWithGoogle, isConfigured } = useAuth();
+  const { register, loginWithGoogle } = useAuth();
 
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
@@ -66,29 +66,6 @@ export const Register: React.FC = () => {
       title="Create Your Account"
       subtitle="Join MARUDHAM OG MUSIC for personal favorites, playlists, and tailored recommendations"
     >
-      {/* Firebase configuration warning if missing */}
-      {!isConfigured && (
-        <div
-          style={{
-            backgroundColor: 'rgba(234, 179, 8, 0.1)',
-            border: '1px solid rgba(234, 179, 8, 0.3)',
-            borderRadius: '12px',
-            padding: '12px 16px',
-            marginBottom: '20px',
-            display: 'flex',
-            alignItems: 'flex-start',
-            gap: '12px',
-            fontSize: '13px',
-            color: '#FDE047'
-          }}
-        >
-          <AlertCircle size={18} style={{ flexShrink: 0, marginTop: '2px' }} />
-          <div>
-            <strong>Firebase Setup Notice:</strong> Live account registration requires Firebase environment keys in <code>.env.local</code>.
-          </div>
-        </div>
-      )}
-
       {/* Error Banner */}
       {error && (
         <div
@@ -197,7 +174,7 @@ export const Register: React.FC = () => {
               type="email"
               required
               autoComplete="email"
-              placeholder="listener@ogmusic.com"
+              placeholder="name@example.com"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               style={{
