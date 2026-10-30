@@ -19,19 +19,23 @@ import type {
   Friendship,
   RoomParticipant
 } from '../../types/friends';
+import {
+  publishRelayMessage,
+  pollRelayMessages,
+  subscribeRelayTopic
+} from './cloudRelay';
 
-// Local storage keys for testing / offline transport
+// Local storage keys for testing / offline fallback
 const LS_ROOMS = 'og_music_ls_rooms';
 const LS_INVITES = 'og_music_ls_invites';
 const LS_REQUESTS = 'og_music_ls_requests';
 const LS_FRIENDSHIPS = 'og_music_ls_friendships';
 
-// BroadcastChannel for instant multi-tab / multi-user event synchronization in local/dev
+// BroadcastChannel for instant multi-tab event synchronization
 const channel = typeof window !== 'undefined' && 'BroadcastChannel' in window
   ? new BroadcastChannel('og_music_friends_sync_channel')
   : null;
 
-// Local store helpers
 function readLocal<T>(key: string): Record<string, T> {
   try {
     const raw = localStorage.getItem(key);
@@ -76,15 +80,19 @@ export class FriendsService {
       expiresAt,
     };
 
+    // 1. Primary: Save to Firestore if available
     if (db) {
       try {
         await setDoc(doc(db, 'roomInvitations', inviteToken), invitation);
       } catch (err) {
-        console.warn('Firestore invitation write skipped, falling back to local sync:', err);
+        console.warn('Firestore invitation write skipped:', err);
       }
     }
 
-    // Always mirror to local store for resilience
+    // 2. Global Cloud Relay: Broadcast so recipients on any network can resolve it immediately
+    publishRelayMessage(`og_inv_${inviteToken}`, invitation).catch(() => {});
+
+    // 3. Local storage mirror
     const all = readLocal<RoomInvitation>(LS_INVITES);
     all[inviteToken] = invitation;
     writeLocal(LS_INVITES, all);
@@ -92,9 +100,36 @@ export class FriendsService {
     return invitation;
   }
 
-  async getInvitation(inviteToken: string): Promise<RoomInvitation | null> {
+  /**
+   * Resolves an invitation across Firestore, Cloud Relay, URL parameters, and local cache.
+   * Guarantees recipient sees authentic host details even before Firestore sync.
+   */
+  async getInvitation(inviteToken: string, searchParams?: URLSearchParams): Promise<RoomInvitation | null> {
     if (!inviteToken) return null;
 
+    // 1. Instant resolution from URL search parameters if available
+    let paramFallback: RoomInvitation | null = null;
+    if (searchParams) {
+      const hostName = searchParams.get('h');
+      const roomTitle = searchParams.get('r');
+      const hostId = searchParams.get('hid');
+      const roomId = searchParams.get('rid');
+      if (hostName && hostId) {
+        paramFallback = {
+          id: inviteToken,
+          roomId: roomId || `room_${hostId}`,
+          hostId,
+          hostName,
+          hostEmail: '',
+          roomTitle: roomTitle || `${hostName}'s Room`,
+          status: 'active',
+          createdAt: Date.now(),
+          expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
+        };
+      }
+    }
+
+    // 2. Check Firestore
     if (db) {
       try {
         const snap = await getDoc(doc(db, 'roomInvitations', inviteToken));
@@ -110,12 +145,30 @@ export class FriendsService {
       }
     }
 
+    // 3. Check Global Cloud Relay
+    try {
+      const relayMessages = await pollRelayMessages<RoomInvitation>(`og_inv_${inviteToken}`);
+      if (relayMessages.length > 0) {
+        const inv = relayMessages[relayMessages.length - 1];
+        if (inv.expiresAt < Date.now()) {
+          return { ...inv, status: 'expired' };
+        }
+        return inv;
+      }
+    } catch {}
+
+    // 4. Check local store
     const all = readLocal<RoomInvitation>(LS_INVITES);
     const inv = all[inviteToken] || null;
-    if (inv && inv.expiresAt < Date.now()) {
-      return { ...inv, status: 'expired' };
+    if (inv) {
+      if (inv.expiresAt < Date.now()) {
+        return { ...inv, status: 'expired' };
+      }
+      return inv;
     }
-    return inv;
+
+    // 5. Fall back to parsed URL parameters if present
+    return paramFallback;
   }
 
   async revokeInvitation(inviteToken: string, hostId: string): Promise<void> {
@@ -130,6 +183,8 @@ export class FriendsService {
         console.warn('Firestore revoke error:', err);
       }
     }
+
+    publishRelayMessage(`og_inv_${inviteToken}`, { status: 'revoked', id: inviteToken }).catch(() => {});
 
     const all = readLocal<RoomInvitation>(LS_INVITES);
     if (all[inviteToken] && all[inviteToken].hostId === hostId) {
@@ -184,6 +239,7 @@ export class FriendsService {
       updatedAt: now,
     };
 
+    // 1. Primary: Save to Firestore
     if (db) {
       try {
         await setDoc(doc(db, 'roomJoinRequests', requestId), request);
@@ -192,6 +248,10 @@ export class FriendsService {
       }
     }
 
+    // 2. Global Cloud Relay: Deliver directly to host's device in real-time
+    publishRelayMessage(`og_reqs_${invite.hostId}`, request).catch(() => {});
+
+    // 3. Local storage mirror
     const all = readLocal<RoomJoinRequest>(LS_REQUESTS);
     all[requestId] = request;
     writeLocal(LS_REQUESTS, all);
@@ -211,7 +271,7 @@ export class FriendsService {
     const newStatus = accept ? 'accepted' : 'rejected';
     const now = Date.now();
 
-    // 1. Update Request status
+    // 1. Update Request status in Firestore
     if (db) {
       try {
         await updateDoc(doc(db, 'roomJoinRequests', request.id), {
@@ -223,6 +283,7 @@ export class FriendsService {
       }
     }
 
+    // 2. Local store update
     const reqs = readLocal<RoomJoinRequest>(LS_REQUESTS);
     if (reqs[request.id]) {
       reqs[request.id].status = newStatus;
@@ -230,8 +291,17 @@ export class FriendsService {
       writeLocal(LS_REQUESTS, reqs);
     }
 
+    // 3. Global Cloud Relay: Notify recipient device instantly
+    publishRelayMessage(`og_appr_${request.roomId}_${request.userId}`, {
+      status: newStatus,
+      requestId: request.id,
+      roomId: request.roomId,
+      hostName: host.displayName || host.email.split('@')[0],
+      updatedAt: now,
+    }).catch(() => {});
+
     if (accept) {
-      // 2. Add as participant to the room (creating room on demand if not yet active)
+      // 4. Add as participant to the room
       let room = await this.getRoom(request.roomId);
       if (!room) {
         room = await this.createOrGetRoom(host);
@@ -257,7 +327,7 @@ export class FriendsService {
         updatedAt: now,
       });
 
-      // 3. Establish permanent Friendship
+      // 5. Establish permanent Friendship
       await this.createFriendship(host, {
         id: request.userId,
         displayName: request.userDisplayName,
@@ -271,42 +341,67 @@ export class FriendsService {
     hostId: string,
     callback: (requests: RoomJoinRequest[]) => void
   ): () => void {
+    const activeRequestsMap = new Map<string, RoomJoinRequest>();
+
+    const emit = () => {
+      const list = Array.from(activeRequestsMap.values()).filter(r => r.status === 'pending');
+      callback(list);
+    };
+
+    // Pre-populate from local store
+    const local = readLocal<RoomJoinRequest>(LS_REQUESTS);
+    for (const r of Object.values(local)) {
+      if (r.hostId === hostId) {
+        activeRequestsMap.set(r.id, r);
+      }
+    }
+    emit();
+
+    let unsubFirestore = () => {};
     if (db) {
       try {
         const q = query(
           collection(db, 'roomJoinRequests'),
           where('hostId', '==', hostId)
         );
-        return onSnapshot(q, (snapshot) => {
-          const list = snapshot.docs.map(d => d.data() as RoomJoinRequest);
-          callback(list.filter(r => r.status === 'pending'));
-        }, (err) => {
-          console.warn('Firestore request subscription fallback to local:', err);
-        });
+        unsubFirestore = onSnapshot(q, (snapshot) => {
+          for (const docSnap of snapshot.docs) {
+            const data = docSnap.data() as RoomJoinRequest;
+            activeRequestsMap.set(data.id, data);
+          }
+          emit();
+        }, () => {});
       } catch {}
     }
 
-    // Local / Dev subscription
-    const update = () => {
-      const all = readLocal<RoomJoinRequest>(LS_REQUESTS);
-      const hostRequests = Object.values(all).filter(
-        r => r.hostId === hostId && r.status === 'pending'
-      );
-      callback(hostRequests);
-    };
+    // Subscribe to Global Cloud Relay for instant multi-network delivery
+    const unsubRelay = subscribeRelayTopic<RoomJoinRequest>(`og_reqs_${hostId}`, (req) => {
+      if (req && req.id && req.hostId === hostId) {
+        activeRequestsMap.set(req.id, req);
+        const all = readLocal<RoomJoinRequest>(LS_REQUESTS);
+        all[req.id] = req;
+        writeLocal(LS_REQUESTS, all);
+        emit();
+      }
+    });
 
-    update();
     const handler = (e: MessageEvent) => {
       if (e.data?.key === LS_REQUESTS || e.data?.type === 'SYNC_UPDATE') {
-        update();
+        const updated = readLocal<RoomJoinRequest>(LS_REQUESTS);
+        for (const r of Object.values(updated)) {
+          if (r.hostId === hostId) activeRequestsMap.set(r.id, r);
+        }
+        emit();
       }
     };
     if (channel) channel.addEventListener('message', handler);
-    window.addEventListener('storage', update);
+    window.addEventListener('storage', emit);
 
     return () => {
+      unsubFirestore();
+      unsubRelay();
       if (channel) channel.removeEventListener('message', handler);
-      window.removeEventListener('storage', update);
+      window.removeEventListener('storage', emit);
     };
   }
 
@@ -316,33 +411,65 @@ export class FriendsService {
     callback: (request: RoomJoinRequest | null) => void
   ): () => void {
     const requestId = `${roomId}_${userId}`;
+    let isFinished = false;
 
+    // Check local store first
+    const local = readLocal<RoomJoinRequest>(LS_REQUESTS);
+    if (local[requestId]) {
+      callback(local[requestId]);
+    }
+
+    let unsubFirestore = () => {};
     if (db) {
       try {
-        return onSnapshot(doc(db, 'roomJoinRequests', requestId), (snap) => {
+        unsubFirestore = onSnapshot(doc(db, 'roomJoinRequests', requestId), (snap) => {
+          if (isFinished) return;
           if (snap.exists()) {
             callback(snap.data() as RoomJoinRequest);
-          } else {
-            callback(null);
           }
-        }, (err) => {
-          console.warn('Firestore my request subscription fallback:', err);
-        });
+        }, () => {});
       } catch {}
     }
 
-    const update = () => {
-      const all = readLocal<RoomJoinRequest>(LS_REQUESTS);
-      callback(all[requestId] || null);
-    };
+    // Subscribe to Cloud Relay for approval broadcast
+    const unsubRelay = subscribeRelayTopic<{ status: 'accepted' | 'rejected'; roomId: string }>(
+      `og_appr_${roomId}_${userId}`,
+      (payload) => {
+        if (isFinished) return;
+        if (payload?.status) {
+          const req: RoomJoinRequest = {
+            id: requestId,
+            roomId,
+            inviteToken: '',
+            hostId: '',
+            userId,
+            userDisplayName: '',
+            userEmail: '',
+            status: payload.status,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          };
+          const all = readLocal<RoomJoinRequest>(LS_REQUESTS);
+          all[requestId] = req;
+          writeLocal(LS_REQUESTS, all);
+          callback(req);
+        }
+      }
+    );
 
-    update();
-    const handler = () => update();
-    if (channel) channel.addEventListener('message', handler);
+    const update = () => {
+      if (isFinished) return;
+      const all = readLocal<RoomJoinRequest>(LS_REQUESTS);
+      if (all[requestId]) callback(all[requestId]);
+    };
+    if (channel) channel.addEventListener('message', update);
     window.addEventListener('storage', update);
 
     return () => {
-      if (channel) channel.removeEventListener('message', handler);
+      isFinished = true;
+      unsubFirestore();
+      unsubRelay();
+      if (channel) channel.removeEventListener('message', update);
       window.removeEventListener('storage', update);
     };
   }
@@ -475,6 +602,14 @@ export class FriendsService {
       } catch {}
     }
 
+    // Check Cloud Relay poll
+    try {
+      const recent = await pollRelayMessages<ListeningRoom>(`og_room_${roomId}`);
+      if (recent.length > 0) {
+        return recent[recent.length - 1];
+      }
+    } catch {}
+
     const all = readLocal<ListeningRoom>(LS_ROOMS);
     return all[roomId] || null;
   }
@@ -487,6 +622,9 @@ export class FriendsService {
         console.warn('Firestore save room error:', err);
       }
     }
+
+    // Broadcast room update globally to participants across all devices
+    publishRelayMessage(`og_room_${room.id}`, room).catch(() => {});
 
     const all = readLocal<ListeningRoom>(LS_ROOMS);
     all[room.id] = room;
@@ -564,7 +702,7 @@ export class FriendsService {
       playbackState: update.playbackState !== undefined ? update.playbackState : room.playbackState,
       basePosition: update.basePosition !== undefined ? update.basePosition : room.basePosition,
       baseTimestamp: now,
-      stateVersion: room.stateVersion + 1,
+      stateVersion: (room.stateVersion || 0) + 1,
       queue: update.queue !== undefined ? update.queue : room.queue,
       queueIndex: update.queueIndex !== undefined ? update.queueIndex : room.queueIndex,
       updatedAt: now,
@@ -586,7 +724,6 @@ export class FriendsService {
     if (!room) return;
 
     if (room.hostId === userId) {
-      // Host leaves -> room ends
       await this.endRoom(roomId, userId);
       return;
     }
@@ -629,19 +766,28 @@ export class FriendsService {
     roomId: string,
     callback: (room: ListeningRoom | null) => void
   ): () => void {
+    let unsubFirestore = () => {};
     if (db) {
       try {
-        return onSnapshot(doc(db, 'listeningRooms', roomId), (snap) => {
+        unsubFirestore = onSnapshot(doc(db, 'listeningRooms', roomId), (snap) => {
           if (snap.exists()) {
             callback(snap.data() as ListeningRoom);
           } else {
             callback(null);
           }
-        }, (err) => {
-          console.warn('Firestore room subscription fallback:', err);
-        });
+        }, () => {});
       } catch {}
     }
+
+    // Subscribe to Cloud Relay for sub-second cross-network updates
+    const unsubRelay = subscribeRelayTopic<ListeningRoom>(`og_room_${roomId}`, (updatedRoom) => {
+      if (updatedRoom && updatedRoom.id === roomId) {
+        const all = readLocal<ListeningRoom>(LS_ROOMS);
+        all[roomId] = updatedRoom;
+        writeLocal(LS_ROOMS, all);
+        callback(updatedRoom);
+      }
+    });
 
     const update = () => {
       const all = readLocal<ListeningRoom>(LS_ROOMS);
@@ -658,6 +804,8 @@ export class FriendsService {
     window.addEventListener('storage', update);
 
     return () => {
+      unsubFirestore();
+      unsubRelay();
       if (channel) channel.removeEventListener('message', handler);
       window.removeEventListener('storage', update);
     };

@@ -22,7 +22,7 @@ export const Register: React.FC = () => {
   // Return to previous route (such as /friends/invite/:token) or default to /friends
   const from = typeof (location.state as any)?.from === 'string'
     ? (location.state as any).from
-    : (location.state as any)?.from?.pathname || '/friends';
+    : (location.state as any)?.from?.pathname || sessionStorage.getItem('og_pending_invite_url') || '/friends';
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

@@ -73,7 +73,7 @@ export const Friends = () => {
     let isMounted = true;
     setInviteError(null);
 
-    friendsService.getInvitation(inviteToken).then((inv) => {
+    friendsService.getInvitation(inviteToken, searchParams).then((inv) => {
       if (!isMounted) return;
       if (!inv) {
         setInviteError('Invitation not found or has been removed.');
@@ -91,7 +91,7 @@ export const Friends = () => {
     });
 
     return () => { isMounted = false; };
-  }, [inviteToken]);
+  }, [inviteToken, searchParams]);
 
   const handleCopy = async () => {
     const success = await copyInviteLink();
@@ -113,8 +113,14 @@ export const Friends = () => {
   // If user is not logged in:
   if (!user) {
     const returnPath = inviteToken
-      ? `/friends/invite/${encodeURIComponent(inviteToken)}`
+      ? `/friends/invite/${encodeURIComponent(inviteToken)}${window.location.search || ''}`
       : '/friends';
+
+    try {
+      if (inviteToken) {
+        sessionStorage.setItem('og_pending_invite_url', returnPath);
+      }
+    } catch {}
 
     return (
       <div className="friends-page-container">

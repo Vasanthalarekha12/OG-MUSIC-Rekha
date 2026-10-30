@@ -326,8 +326,22 @@ export const FriendsProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
+  const buildShareUrl = (token: string): string => {
+    const hostName = user?.displayName || user?.email?.split('@')[0] || 'Host';
+    const roomTitle = activeRoom?.name || `${hostName}'s Room`;
+    const hostId = user?.id || '';
+    const roomId = activeRoom?.id || `room_${hostId}`;
+    const params = new URLSearchParams({
+      h: hostName,
+      r: roomTitle,
+      hid: hostId,
+      rid: roomId,
+    });
+    return `${window.location.origin}/friends/invite/${encodeURIComponent(token)}?${params.toString()}`;
+  };
+
   const inviteLink = activeInvitation
-    ? `${window.location.origin}/friends/invite/${encodeURIComponent(activeInvitation.id)}`
+    ? buildShareUrl(activeInvitation.id)
     : '';
 
   const copyInviteLink = async (): Promise<boolean> => {
@@ -339,7 +353,7 @@ export const FriendsProvider = ({ children }: { children: ReactNode }) => {
       }
       if (!targetToken) return false;
 
-      const linkToCopy = `${window.location.origin}/friends/invite/${encodeURIComponent(targetToken)}`;
+      const linkToCopy = buildShareUrl(targetToken);
 
       if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
         try {
@@ -375,7 +389,7 @@ export const FriendsProvider = ({ children }: { children: ReactNode }) => {
       } catch {}
     }
     const link = targetToken
-      ? `${window.location.origin}/friends/invite/${encodeURIComponent(targetToken)}`
+      ? buildShareUrl(targetToken)
       : `${window.location.origin}/friends`;
     const hostName = user?.displayName || 'Your friend';
     const message = `Hey! Join ${hostName} on OG MUSIC and let's listen to music together in real-time. Open this invitation: ${link}`;
