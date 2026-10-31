@@ -1,5 +1,16 @@
 import type { Song, QueueItem } from './index';
 
+export type InvitationWorkflowState =
+  | 'INVITED'
+  | 'REQUEST_PENDING'
+  | 'APPROVED'
+  | 'JOINING'
+  | 'JOINED'
+  | 'REJECTED'
+  | 'EXPIRED'
+  | 'ROOM_FULL'
+  | 'FAILED';
+
 export interface RoomParticipant {
   id: string;
   displayName: string;

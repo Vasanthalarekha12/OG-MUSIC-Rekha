@@ -32,6 +32,8 @@ interface FriendsContextType {
   copyInviteLink: () => Promise<boolean>;
   shareOnWhatsApp: () => void;
   requestJoinRoom: (invite: RoomInvitation) => Promise<void>;
+  joinRoomSession: (roomId: string) => Promise<boolean>;
+  setJoinRequestStatus: (status: 'idle' | 'pending' | 'accepted' | 'rejected') => void;
   acceptJoinRequest: (req: RoomJoinRequest) => Promise<void>;
   rejectJoinRequest: (req: RoomJoinRequest) => Promise<void>;
   removeFriend: (friendId: string) => Promise<void>;
@@ -58,14 +60,6 @@ export const FriendsProvider = ({ children }: { children: ReactNode }) => {
   const isListener = Boolean(
     activeRoom && user && activeRoom.hostId !== user.id && activeRoom.participants[user.id]
   );
-
-  const lastBroadcastRef = useRef<{
-    trackId: string | null;
-    playing: boolean;
-    pos: number;
-    time: number;
-    queueIndex: number;
-  }>({ trackId: null, playing: false, pos: 0, time: 0, queueIndex: -1 });
 
   const isApplyingRemoteSyncRef = useRef(false);
 
@@ -170,16 +164,19 @@ export const FriendsProvider = ({ children }: { children: ReactNode }) => {
     return () => clearInterval(interval);
   }, [activeRoom?.id, user, player.playbackVerifiedState]);
 
-  // 5. HOST BROADCASTER: When host changes song or play/pause/seek, update the room
+  // 5. HOST BROADCASTER: Broadcasts playback commands authoritatively
+  const lastTrackIdRef = useRef<string | null>(null);
+
   useEffect(() => {
     if (!isHost || !activeRoom || !user) {
       player.setOnPlaybackBroadcast(null);
       return;
     }
 
-    // Direct imperative action broadcast hook
+    // Direct imperative action broadcast hook (fires on PLAY, PAUSE, SEEK, TRACK_CHANGE, QUEUE_CHANGE)
     player.setOnPlaybackBroadcast((cmd) => {
       if (isApplyingRemoteSyncRef.current) return;
+      lastTrackIdRef.current = cmd.track?.id || null;
       friendsService.updatePlaybackState(activeRoom.id, user.id, {
         currentTrack: cmd.track,
         playbackState: cmd.type === 'PAUSE' ? 'paused' : 'playing',
@@ -194,82 +191,75 @@ export const FriendsProvider = ({ children }: { children: ReactNode }) => {
       });
     });
 
-    // Avoid broadcasting state updates that originated from remote sync
-    if (isApplyingRemoteSyncRef.current) return;
-
-    const currentTrackId = player.currentTrack?.id || null;
-    const isPlaying = player.isPlaying;
-    const pos = player.currentTime;
-    const qIndex = player.queueIndex;
-    const now = Date.now();
-
-    const trackChanged = currentTrackId !== lastBroadcastRef.current.trackId;
-    const playStateChanged = isPlaying !== lastBroadcastRef.current.playing;
-    const queueIndexChanged = qIndex !== lastBroadcastRef.current.queueIndex;
-
-    // Detect seek jumps (deviation from continuous linear timeline)
-    const expectedLinearPos = lastBroadcastRef.current.playing
-      ? lastBroadcastRef.current.pos + (now - lastBroadcastRef.current.time) / 1000
-      : lastBroadcastRef.current.pos;
-    const isSeekJump = Math.abs(pos - expectedLinearPos) > 3;
-
-    if (trackChanged || playStateChanged || queueIndexChanged || isSeekJump) {
-      lastBroadcastRef.current = {
-        trackId: currentTrackId,
-        playing: isPlaying,
-        pos,
-        time: now,
-        queueIndex: qIndex,
-      };
-
-      friendsService.updatePlaybackState(activeRoom.id, user.id, {
-        currentTrack: player.currentTrack,
-        playbackState: isPlaying ? 'playing' : 'paused',
-        basePosition: pos,
-        queue: player.queue,
-        queueIndex: qIndex,
-        shuffleEnabled: player.isShuffle,
-        repeatMode: player.repeatMode,
-        lastCommandId: `auto_${now}`
-      }).catch(err => {
-        console.warn('Playback broadcast error:', err);
-      });
-    }
-
     return () => {
       player.setOnPlaybackBroadcast(null);
     };
-  }, [
-    isHost,
-    activeRoom?.id,
-    player.currentTrack,
-    player.isPlaying,
-    player.currentTime,
-    player.queue,
-    player.queueIndex,
-    player.isShuffle,
-    player.repeatMode,
-    player.setOnPlaybackBroadcast,
-    user
-  ]);
+  }, [isHost, activeRoom?.id, user, player.setOnPlaybackBroadcast]);
 
-  // 6. LISTENER RECONCILIATION: When listener is in room, follow host playback
+  // 5b. Detect natural track transition when a song ends and player auto-advances
+  useEffect(() => {
+    if (!isHost || !activeRoom || !user || !player.currentTrack) return;
+    if (isApplyingRemoteSyncRef.current) return;
+
+    if (lastTrackIdRef.current && lastTrackIdRef.current !== player.currentTrack.id) {
+      lastTrackIdRef.current = player.currentTrack.id;
+      friendsService.updatePlaybackState(activeRoom.id, user.id, {
+        currentTrack: player.currentTrack,
+        playbackState: player.isPlaying ? 'playing' : 'paused',
+        basePosition: 0,
+        queue: player.queue,
+        queueIndex: player.queueIndex,
+        shuffleEnabled: player.isShuffle,
+        repeatMode: player.repeatMode,
+        lastCommandId: `natural_next_${Date.now()}`
+      }).catch(() => {});
+    } else if (!lastTrackIdRef.current) {
+      lastTrackIdRef.current = player.currentTrack.id;
+    }
+  }, [isHost, activeRoom?.id, user, player.currentTrack, player.isPlaying, player.queue, player.queueIndex, player.isShuffle, player.repeatMode]);
+
+  // 5c. Low-frequency anchor (every 25 seconds during active playback to prevent long-term drift)
+  useEffect(() => {
+    if (!isHost || !activeRoom || !user || !player.isPlaying || !player.currentTrack) return;
+
+    const interval = setInterval(() => {
+      if (isApplyingRemoteSyncRef.current) return;
+      friendsService.updatePlaybackState(activeRoom.id, user.id, {
+        currentTrack: player.currentTrack,
+        playbackState: 'playing',
+        basePosition: player.currentTime,
+        queue: player.queue,
+        queueIndex: player.queueIndex,
+        shuffleEnabled: player.isShuffle,
+        repeatMode: player.repeatMode,
+        lastCommandId: `anchor_${Date.now()}`
+      }).catch(() => {});
+    }, 25000);
+
+    return () => clearInterval(interval);
+  }, [isHost, activeRoom?.id, user, player.isPlaying, player.currentTrack, player.currentTime, player.queue, player.queueIndex, player.isShuffle, player.repeatMode]);
+
+  // 6. LISTENER RECONCILIATION: Follow host playback smoothly without stutter or seek loops
+  const lastSyncedTrackIdRef = useRef<string | null>(null);
+  const lastSeekTimestampRef = useRef<number>(0);
+
   useEffect(() => {
     if (!isListener || !activeRoom || !activeRoom.currentTrack) return;
 
     const remoteTrack: Song = activeRoom.currentTrack;
     const remotePlayState = activeRoom.playbackState;
-    const basePos = activeRoom.basePosition;
-    const baseTs = activeRoom.baseTimestamp;
+    const basePos = activeRoom.basePosition || 0;
+    const baseTs = activeRoom.baseTimestamp || Date.now();
 
-    // Calculate authoritative expected position
     const elapsed = remotePlayState === 'playing' ? (Date.now() - baseTs) / 1000 : 0;
     const expectedPos = Math.max(0, basePos + elapsed);
 
-    // Track identity sync
-    if (player.currentTrack?.id !== remoteTrack.id) {
+    // Track identity transition
+    if (player.currentTrack?.id !== remoteTrack.id || lastSyncedTrackIdRef.current !== remoteTrack.id) {
+      lastSyncedTrackIdRef.current = remoteTrack.id;
       isApplyingRemoteSyncRef.current = true;
       player.play(remoteTrack);
+
       setTimeout(() => {
         if (expectedPos > 0) {
           player.seek(expectedPos, true);
@@ -279,8 +269,8 @@ export const FriendsProvider = ({ children }: { children: ReactNode }) => {
         }
         setTimeout(() => {
           isApplyingRemoteSyncRef.current = false;
-        }, 300);
-      }, 500);
+        }, 400);
+      }, 600);
       return;
     }
 
@@ -288,22 +278,25 @@ export const FriendsProvider = ({ children }: { children: ReactNode }) => {
     if (remotePlayState === 'playing' && !player.isPlaying) {
       isApplyingRemoteSyncRef.current = true;
       player.play();
-      setTimeout(() => { isApplyingRemoteSyncRef.current = false; }, 200);
+      setTimeout(() => { isApplyingRemoteSyncRef.current = false; }, 250);
     } else if (remotePlayState === 'paused' && player.isPlaying) {
       isApplyingRemoteSyncRef.current = true;
       player.pause();
-      setTimeout(() => { isApplyingRemoteSyncRef.current = false; }, 200);
+      setTimeout(() => { isApplyingRemoteSyncRef.current = false; }, 250);
     }
 
-    // Controlled drift reconciliation (do not hard-seek within 2.5s window)
+    // Drift tolerance is 3.5s
     const drift = Math.abs(player.currentTime - expectedPos);
     setSyncDrift(Math.round(drift * 10) / 10);
-    setIsSynced(drift < 2.5);
+    setIsSynced(drift <= 3.5);
 
-    if (drift > 2.5 && remotePlayState === 'playing') {
+    const now = Date.now();
+    // Only seek if drift > 3.5s AND at least 10s has passed since last seek (to avoid seek-loops)
+    if (drift > 3.5 && remotePlayState === 'playing' && (now - lastSeekTimestampRef.current > 10000)) {
+      lastSeekTimestampRef.current = now;
       isApplyingRemoteSyncRef.current = true;
       player.seek(expectedPos, true);
-      setTimeout(() => { isApplyingRemoteSyncRef.current = false; }, 300);
+      setTimeout(() => { isApplyingRemoteSyncRef.current = false; }, 400);
     }
   }, [
     isListener,
@@ -314,7 +307,7 @@ export const FriendsProvider = ({ children }: { children: ReactNode }) => {
     activeRoom?.baseTimestamp,
   ]);
 
-  // 6b. Continuous drift checker for listeners (every 3 seconds)
+  // 6b. Periodic drift monitor for listeners (every 4 seconds)
   const playerCurrentTimeRef = useRef(player.currentTime);
   useEffect(() => {
     playerCurrentTimeRef.current = player.currentTime;
@@ -327,22 +320,24 @@ export const FriendsProvider = ({ children }: { children: ReactNode }) => {
 
     const interval = setInterval(() => {
       if (isApplyingRemoteSyncRef.current) return;
-      const basePos = activeRoom.basePosition;
-      const baseTs = activeRoom.baseTimestamp;
+      const basePos = activeRoom.basePosition || 0;
+      const baseTs = activeRoom.baseTimestamp || Date.now();
       const elapsed = (Date.now() - baseTs) / 1000;
       const expectedPos = Math.max(0, basePos + elapsed);
       const currentPos = playerCurrentTimeRef.current;
       const drift = Math.abs(currentPos - expectedPos);
-      
-      setSyncDrift(Math.round(drift * 10) / 10);
-      setIsSynced(drift < 2.5);
 
-      if (drift > 2.5) {
+      setSyncDrift(Math.round(drift * 10) / 10);
+      setIsSynced(drift <= 3.5);
+
+      const now = Date.now();
+      if (drift > 3.5 && (now - lastSeekTimestampRef.current > 10000)) {
+        lastSeekTimestampRef.current = now;
         isApplyingRemoteSyncRef.current = true;
         player.seek(expectedPos, true);
-        setTimeout(() => { isApplyingRemoteSyncRef.current = false; }, 300);
+        setTimeout(() => { isApplyingRemoteSyncRef.current = false; }, 400);
       }
-    }, 3000);
+    }, 4000);
 
     return () => clearInterval(interval);
   }, [
@@ -481,6 +476,26 @@ export const FriendsProvider = ({ children }: { children: ReactNode }) => {
     window.open(url, '_blank');
   };
 
+  const joinRoomSession = async (roomId: string): Promise<boolean> => {
+    if (!user) return false;
+
+    // Retry fetching room up to 10 times (at 400ms interval = 4s total)
+    let room = await friendsService.getRoom(roomId);
+    let retries = 10;
+    while (retries > 0 && (!room || room.status !== 'active' || !room.participants?.[user.id])) {
+      await new Promise(r => setTimeout(r, 400));
+      room = await friendsService.getRoom(roomId);
+      retries--;
+    }
+
+    if (room && room.status === 'active') {
+      setActiveRoom(room);
+      localStorage.setItem(ACTIVE_ROOM_KEY, room.id);
+      return true;
+    }
+    return false;
+  };
+
   const requestJoinRoom = async (invite: RoomInvitation): Promise<void> => {
     if (!user) throw new Error('Please sign in to request access.');
     setJoinRequestStatus('pending');
@@ -492,18 +507,7 @@ export const FriendsProvider = ({ children }: { children: ReactNode }) => {
       if (updatedReq?.status === 'accepted') {
         setJoinRequestStatus('accepted');
         unsub();
-        // Load the room with retry to ensure host write propagation contains user in participants
-        let room = await friendsService.getRoom(invite.roomId);
-        let retries = 5;
-        while (retries > 0 && (!room || !room.participants?.[user.id])) {
-          await new Promise(r => setTimeout(r, 400));
-          room = await friendsService.getRoom(invite.roomId);
-          retries--;
-        }
-        if (room && room.status === 'active') {
-          setActiveRoom(room);
-          localStorage.setItem(ACTIVE_ROOM_KEY, room.id);
-        }
+        await joinRoomSession(invite.roomId);
       } else if (updatedReq?.status === 'rejected') {
         setJoinRequestStatus('rejected');
         unsub();
@@ -549,6 +553,8 @@ export const FriendsProvider = ({ children }: { children: ReactNode }) => {
         activeInvitation,
         inviteLink,
         joinRequestStatus,
+        setJoinRequestStatus,
+        joinRoomSession,
         createRoom,
         endActiveRoom,
         leaveActiveRoom,

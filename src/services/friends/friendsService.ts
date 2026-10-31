@@ -426,6 +426,31 @@ export class FriendsService {
     };
   }
 
+  async getMyRequest(roomId: string, userId: string): Promise<RoomJoinRequest | null> {
+    const requestId = `${roomId}_${userId}`;
+    // 1. Check local store
+    const local = readLocal<RoomJoinRequest>(LS_REQUESTS);
+    if (local[requestId]) {
+      return local[requestId];
+    }
+    // 2. Check Firestore
+    if (db) {
+      try {
+        const snap = await getDoc(doc(db, 'roomJoinRequests', requestId));
+        if (snap.exists()) {
+          const req = snap.data() as RoomJoinRequest;
+          const all = readLocal<RoomJoinRequest>(LS_REQUESTS);
+          all[requestId] = req;
+          writeLocal(LS_REQUESTS, all);
+          return req;
+        }
+      } catch (err) {
+        console.warn('Firestore getMyRequest error:', err);
+      }
+    }
+    return null;
+  }
+
   subscribeToMyRequest(
     roomId: string,
     userId: string,
@@ -753,12 +778,39 @@ export class FriendsService {
     user: User,
     playbackState: 'idle' | 'buffering' | 'playing' | 'paused' | 'failed' = 'idle'
   ): Promise<void> {
-    const room = await this.getRoom(roomId);
-    if (!room || !room.participants || !room.participants[user.id]) return;
+    const now = Date.now();
 
-    room.participants[user.id].lastHeartbeat = Date.now();
-    room.participants[user.id].playbackState = playbackState;
-    await this.saveRoom(room);
+    // 1. Field-level Firestore update: NEVER overwrite the root room document!
+    if (db) {
+      try {
+        const roomRef = doc(db, 'listeningRooms', roomId);
+        await updateDoc(roomRef, {
+          [`participants.${user.id}.lastHeartbeat`]: now,
+          [`participants.${user.id}.playbackState`]: playbackState,
+          [`participants.${user.id}.displayName`]: user.displayName || user.email.split('@')[0],
+          [`participants.${user.id}.photoURL`]: user.photoURL || null,
+        });
+      } catch {
+        // Fall through to local/relay update
+      }
+    }
+
+    // 2. Broadcast lightweight heartbeat event via Cloud Relay (does not overwrite room document)
+    publishRelayMessage(`og_hb_${roomId}`, {
+      userId: user.id,
+      lastHeartbeat: now,
+      playbackState,
+      displayName: user.displayName || user.email.split('@')[0],
+      photoURL: user.photoURL || null,
+    }).catch(() => {});
+
+    // 3. Local store mirror
+    const all = readLocal<ListeningRoom>(LS_ROOMS);
+    if (all[roomId] && all[roomId].participants && all[roomId].participants[user.id]) {
+      all[roomId].participants[user.id].lastHeartbeat = now;
+      all[roomId].participants[user.id].playbackState = playbackState;
+      writeLocal(LS_ROOMS, all);
+    }
   }
 
   async leaveRoom(roomId: string, userId: string): Promise<void> {
@@ -775,6 +827,7 @@ export class FriendsService {
     await this.saveRoom({
       ...room,
       participants: updatedParticipants,
+      memberUids: Object.keys(updatedParticipants),
       updatedAt: Date.now(),
     });
   }
@@ -788,6 +841,7 @@ export class FriendsService {
     await this.saveRoom({
       ...room,
       participants: updatedParticipants,
+      memberUids: Object.keys(updatedParticipants),
       updatedAt: Date.now(),
     });
   }
@@ -825,13 +879,35 @@ export class FriendsService {
       } catch {}
     }
 
-    // Subscribe to Cloud Relay for sub-second cross-network updates
+    // Subscribe to Cloud Relay for sub-second cross-network room updates
     const unsubRelay = subscribeRelayTopic<ListeningRoom>(`og_room_${roomId}`, (updatedRoom) => {
       if (updatedRoom && updatedRoom.id === roomId) {
         const all = readLocal<ListeningRoom>(LS_ROOMS);
         all[roomId] = updatedRoom;
         writeLocal(LS_ROOMS, all);
         callback(updatedRoom);
+      }
+    });
+
+    // Subscribe to lightweight participant heartbeat updates
+    const unsubHeartbeat = subscribeRelayTopic<{
+      userId: string;
+      lastHeartbeat: number;
+      playbackState: 'idle' | 'buffering' | 'playing' | 'paused' | 'failed';
+      displayName?: string;
+      photoURL?: string;
+    }>(`og_hb_${roomId}`, (hb) => {
+      if (hb && hb.userId) {
+        const all = readLocal<ListeningRoom>(LS_ROOMS);
+        const room = all[roomId];
+        if (room && room.participants && room.participants[hb.userId]) {
+          room.participants[hb.userId].lastHeartbeat = hb.lastHeartbeat;
+          room.participants[hb.userId].playbackState = hb.playbackState;
+          if (hb.displayName) room.participants[hb.userId].displayName = hb.displayName;
+          if (hb.photoURL) room.participants[hb.userId].photoURL = hb.photoURL;
+          writeLocal(LS_ROOMS, all);
+          callback({ ...room });
+        }
       }
     });
 
@@ -854,6 +930,7 @@ export class FriendsService {
     return () => {
       unsubFirestore();
       unsubRelay();
+      unsubHeartbeat();
       if (channel) channel.removeEventListener('message', handler);
       window.removeEventListener('storage', update);
     };

@@ -22,8 +22,15 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useFriends } from '../../contexts/FriendsContext';
 import { usePlayer } from '../../contexts/PlayerContext';
 import { friendsService } from '../../services/friends/friendsService';
-import type { RoomInvitation } from '../../types/friends';
+import type { RoomInvitation, InvitationWorkflowState } from '../../types/friends';
 import './Friends.css';
+
+const formatDuration = (seconds: number) => {
+  if (!seconds || isNaN(seconds)) return '0:00';
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+};
 
 export const Friends = () => {
   const { token } = useParams<{ token?: string }>();
@@ -42,7 +49,6 @@ export const Friends = () => {
     pendingRequests,
     sentInvitations,
     inviteLink,
-    joinRequestStatus,
     createRoom,
     endActiveRoom,
     leaveActiveRoom,
@@ -51,7 +57,7 @@ export const Friends = () => {
     revokeInvite,
     copyInviteLink,
     shareOnWhatsApp,
-    requestJoinRoom,
+    joinRoomSession,
     acceptJoinRequest,
     rejectJoinRequest,
     removeFriend,
@@ -61,7 +67,63 @@ export const Friends = () => {
   const [copied, setCopied] = useState(false);
   const [isCreatingRoom, setIsCreatingRoom] = useState(false);
   const [guestInvite, setGuestInvite] = useState<RoomInvitation | null>(null);
-  const [inviteError, setInviteError] = useState<string | null>(null);
+  const [workflowState, setWorkflowState] = useState<InvitationWorkflowState>('INVITED');
+  const [workflowError, setWorkflowError] = useState<string | null>(null);
+  const [isJoiningRoom, setIsJoiningRoom] = useState(false);
+
+  // Listen for host's admission response or direct participant addition
+  const listenForHostResponse = (roomId: string) => {
+    if (!user) return () => {};
+
+    const unsubReq = friendsService.subscribeToMyRequest(roomId, user.id, async (updatedReq) => {
+      if (updatedReq?.status === 'accepted') {
+        unsubReq();
+        setWorkflowState('APPROVED');
+        setTimeout(async () => {
+          setWorkflowState('JOINING');
+          setIsJoiningRoom(true);
+          const ok = await joinRoomSession(roomId);
+          setIsJoiningRoom(false);
+          if (ok) {
+            setWorkflowState('JOINED');
+            setGuestInvite(null);
+            setActiveTab('room');
+            if (token) navigate('/friends', { replace: true });
+          } else {
+            setWorkflowState('FAILED');
+            setWorkflowError('Admission approved, but connecting to room timed out. Please click Retry.');
+          }
+        }, 400);
+      } else if (updatedReq?.status === 'rejected') {
+        unsubReq();
+        setWorkflowState('REJECTED');
+      }
+    });
+
+    const unsubRoom = friendsService.subscribeToRoom(roomId, async (updatedRoom) => {
+      if (updatedRoom && updatedRoom.participants && updatedRoom.participants[user.id]) {
+        unsubRoom();
+        setWorkflowState('APPROVED');
+        setTimeout(async () => {
+          setWorkflowState('JOINING');
+          setIsJoiningRoom(true);
+          const ok = await joinRoomSession(roomId);
+          setIsJoiningRoom(false);
+          if (ok) {
+            setWorkflowState('JOINED');
+            setGuestInvite(null);
+            setActiveTab('room');
+            if (token) navigate('/friends', { replace: true });
+          }
+        }, 400);
+      }
+    });
+
+    return () => {
+      unsubReq();
+      unsubRoom();
+    };
+  };
 
   // If there's an incoming route parameter or ?invite= query parameter, resolve the invitation
   useEffect(() => {
@@ -71,38 +133,115 @@ export const Friends = () => {
     }
 
     let isMounted = true;
-    setInviteError(null);
+    let cleanupListeners: (() => void) | null = null;
+    setWorkflowError(null);
 
-    friendsService.getInvitation(inviteToken, searchParams).then((inv) => {
+    // If user is not yet logged in, simply resolve the invite metadata for display
+    if (!user) {
+      friendsService.getInvitation(inviteToken, searchParams).then((inv) => {
+        if (isMounted && inv) setGuestInvite(inv);
+      }).catch(() => {});
+      return;
+    }
+
+    friendsService.getInvitation(inviteToken, searchParams).then(async (inv) => {
       if (!isMounted) return;
       if (!inv) {
-        setInviteError('Invitation not found or has been removed.');
-      } else if (inv.status === 'revoked') {
-        setInviteError('This invitation has been revoked by the host.');
-      } else if (inv.status === 'expired') {
-        setInviteError('This invitation link has expired.');
-      } else {
-        setGuestInvite(inv);
+        setWorkflowState('EXPIRED');
+        setWorkflowError('Invitation not found or has expired.');
+        return;
       }
+      if (inv.status === 'revoked' || inv.status === 'expired') {
+        setWorkflowState('EXPIRED');
+        setWorkflowError(`This invitation has ${inv.status}. Please request a fresh invitation link from the host.`);
+        return;
+      }
+
+      setGuestInvite(inv);
+
+      // If user is host:
+      if (inv.hostId === user.id) {
+        setWorkflowState('JOINED');
+        setActiveTab('room');
+        if (token) navigate('/friends', { replace: true });
+        return;
+      }
+
+      // Check room state and membership
+      const room = await friendsService.getRoom(inv.roomId);
+      if (room && room.status === 'active') {
+        // Already a member?
+        if (room.participants && room.participants[user.id]) {
+          setWorkflowState('APPROVED');
+          setWorkflowState('JOINING');
+          setIsJoiningRoom(true);
+          const ok = await joinRoomSession(inv.roomId);
+          if (isMounted) {
+            setIsJoiningRoom(false);
+            if (ok) {
+              setWorkflowState('JOINED');
+              setGuestInvite(null);
+              setActiveTab('room');
+              if (token) navigate('/friends', { replace: true });
+              return;
+            }
+          }
+        }
+
+        // Room full check?
+        const maxCap = room.maxCapacity || 10;
+        const currentMembers = Object.keys(room.participants || {}).length;
+        if (currentMembers >= maxCap && !room.participants?.[user.id]) {
+          setWorkflowState('ROOM_FULL');
+          return;
+        }
+      }
+
+      // Check existing join request
+      const existingReq = await friendsService.getMyRequest(inv.roomId, user.id);
+      if (existingReq) {
+        if (existingReq.status === 'accepted') {
+          setWorkflowState('APPROVED');
+          setWorkflowState('JOINING');
+          setIsJoiningRoom(true);
+          const ok = await joinRoomSession(inv.roomId);
+          if (isMounted) {
+            setIsJoiningRoom(false);
+            if (ok) {
+              setWorkflowState('JOINED');
+              setGuestInvite(null);
+              setActiveTab('room');
+              if (token) navigate('/friends', { replace: true });
+              return;
+            } else {
+              setWorkflowState('FAILED');
+              setWorkflowError('Host approved your admission, but room state could not be loaded. Please click Retry Joining Room.');
+              return;
+            }
+          }
+        } else if (existingReq.status === 'pending') {
+          setWorkflowState('REQUEST_PENDING');
+          cleanupListeners = listenForHostResponse(inv.roomId);
+          return;
+        } else if (existingReq.status === 'rejected') {
+          setWorkflowState('REJECTED');
+          return;
+        }
+      }
+
+      setWorkflowState('INVITED');
     }).catch(() => {
       if (isMounted) {
-        setInviteError('Failed to verify invitation. Please check your network.');
+        setWorkflowState('FAILED');
+        setWorkflowError('Failed to verify invitation. Please check your network connection.');
       }
     });
 
-    return () => { isMounted = false; };
-  }, [inviteToken, searchParams]);
-
-  // Automatically navigate into the room as soon as admission is approved
-  useEffect(() => {
-    if (joinRequestStatus === 'accepted' || (activeRoom && guestInvite && activeRoom.id === guestInvite.roomId)) {
-      setGuestInvite(null);
-      setActiveTab('room');
-      if (token) {
-        navigate('/friends', { replace: true });
-      }
-    }
-  }, [joinRequestStatus, activeRoom, guestInvite, token, navigate]);
+    return () => {
+      isMounted = false;
+      if (cleanupListeners) cleanupListeners();
+    };
+  }, [inviteToken, user, searchParams]);
 
   const handleCopy = async () => {
     const success = await copyInviteLink();
@@ -169,8 +308,42 @@ export const Friends = () => {
     );
   }
 
+  const handleRequestToJoin = async () => {
+    if (!guestInvite || !user) return;
+    try {
+      setWorkflowState('REQUEST_PENDING');
+      await friendsService.requestToJoin(guestInvite, user);
+      listenForHostResponse(guestInvite.roomId);
+    } catch (err: any) {
+      if (err?.message?.includes('full')) {
+        setWorkflowState('ROOM_FULL');
+      } else {
+        setWorkflowState('FAILED');
+        setWorkflowError(err?.message || 'Failed to send admission request.');
+      }
+    }
+  };
+
+  const handleRetryJoin = async () => {
+    if (!guestInvite || !user) return;
+    setWorkflowState('JOINING');
+    setWorkflowError(null);
+    setIsJoiningRoom(true);
+    const ok = await joinRoomSession(guestInvite.roomId);
+    setIsJoiningRoom(false);
+    if (ok) {
+      setWorkflowState('JOINED');
+      setGuestInvite(null);
+      setActiveTab('room');
+      if (token) navigate('/friends', { replace: true });
+    } else {
+      setWorkflowState('FAILED');
+      setWorkflowError('Unable to connect to listening room. Please verify the host is online and try again.');
+    }
+  };
+
   // If viewing an invitation as a guest user:
-  if (guestInvite && joinRequestStatus !== 'accepted' && (!activeRoom || activeRoom.id !== guestInvite.roomId)) {
+  if (guestInvite && workflowState !== 'JOINED' && (!activeRoom || activeRoom.id !== guestInvite.roomId)) {
     const isHostOfInvite = guestInvite.hostId === user.id;
 
     return (
@@ -197,46 +370,137 @@ export const Friends = () => {
             </div>
           </div>
 
-          {inviteError && (
-            <div style={{ padding: '12px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: '10px', color: '#f87171', fontSize: '0.9rem' }}>
-              <AlertCircle size={16} style={{ display: 'inline', marginRight: '6px', verticalAlign: '-3px' }} />
-              {inviteError}
-            </div>
-          )}
-
           {isHostOfInvite ? (
-            <div>
+            <div style={{ marginTop: '16px' }}>
               <p style={{ color: 'var(--brand-red)', fontWeight: 600 }}>This is your own listening room invitation.</p>
               <button type="button" className="og-btn-primary" onClick={() => navigate('/friends')}>
                 Open Your Listening Room
               </button>
             </div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '10px' }}>
-              {joinRequestStatus === 'idle' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '16px' }}>
+              {/* 1. INVITED: Request to Join */}
+              {workflowState === 'INVITED' && (
                 <button
                   type="button"
-                  className="og-btn-primary"
-                  onClick={() => requestJoinRoom(guestInvite)}
+                  className="og-btn-primary hover-lift"
+                  style={{ width: '100%', padding: '12px', fontSize: '0.95rem' }}
+                  onClick={handleRequestToJoin}
                 >
                   <UserPlus size={18} /> Request to Join Room
                 </button>
               )}
 
-              {joinRequestStatus === 'pending' && (
-                <div style={{ padding: '16px', background: 'rgba(255,255,255,0.04)', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.08)' }}>
-                  <div style={{ width: '28px', height: '28px', border: '3px solid rgba(220,38,38,0.2)', borderTopColor: 'var(--brand-red)', borderRadius: '50%', animation: 'spin 0.8s linear infinite', margin: '0 auto 10px' }} />
-                  <p style={{ margin: 0, fontWeight: 600, color: '#fff' }}>Request Sent to Host</p>
-                  <span style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
-                    Waiting for {guestInvite.hostName} to approve your admission...
+              {/* 2. REQUEST_PENDING: Waiting for Host */}
+              {workflowState === 'REQUEST_PENDING' && (
+                <div style={{ padding: '20px', background: 'rgba(255,255,255,0.04)', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.08)' }}>
+                  <div style={{ width: '32px', height: '32px', border: '3px solid rgba(220,38,38,0.2)', borderTopColor: 'var(--brand-red)', borderRadius: '50%', animation: 'spin 0.8s linear infinite', margin: '0 auto 12px' }} />
+                  <p style={{ margin: 0, fontWeight: 700, color: '#fff', fontSize: '1.05rem' }}>Request Sent to Host</p>
+                  <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', display: 'block', marginTop: '4px' }}>
+                    Waiting for <strong>{guestInvite.hostName}</strong> to approve your admission...
+                  </span>
+                  <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)', display: 'block', marginTop: '8px' }}>
+                    You will automatically enter the room as soon as the host accepts.
                   </span>
                 </div>
               )}
 
-              {joinRequestStatus === 'rejected' && (
-                <div style={{ padding: '14px', background: 'rgba(239,68,68,0.12)', borderRadius: '12px', color: '#f87171' }}>
-                  <p style={{ margin: 0, fontWeight: 600 }}>Admission Request Declined</p>
-                  <span style={{ fontSize: '0.82rem' }}>The host declined your request to join this session.</span>
+              {/* 3. APPROVED: Acceptance confirmed */}
+              {workflowState === 'APPROVED' && (
+                <div style={{ padding: '20px', background: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.3)', borderRadius: '12px', color: '#4ade80' }}>
+                  <Check size={28} style={{ margin: '0 auto 8px', display: 'block' }} />
+                  <p style={{ margin: 0, fontWeight: 700, fontSize: '1.05rem' }}>Admission Approved!</p>
+                  <span style={{ fontSize: '0.85rem', color: '#cbd5e1', display: 'block', marginTop: '4px' }}>
+                    {guestInvite.hostName} accepted your request. Transitioning into the room...
+                  </span>
+                </div>
+              )}
+
+              {/* 4. JOINING: Loading session */}
+              {workflowState === 'JOINING' && (
+                <div style={{ padding: '20px', background: 'rgba(56,189,248,0.1)', border: '1px solid rgba(56,189,248,0.25)', borderRadius: '12px', color: '#38bdf8' }}>
+                  <div style={{ width: '32px', height: '32px', border: '3px solid rgba(56,189,248,0.2)', borderTopColor: '#38bdf8', borderRadius: '50%', animation: 'spin 0.8s linear infinite', margin: '0 auto 12px' }} />
+                  <p style={{ margin: 0, fontWeight: 700, fontSize: '1.05rem' }}>Entering Listening Room...</p>
+                  <span style={{ fontSize: '0.85rem', color: '#cbd5e1', display: 'block', marginTop: '4px' }}>
+                    Initializing synchronized audio session with {guestInvite.hostName}...
+                  </span>
+                </div>
+              )}
+
+              {/* 5. REJECTED: Host declined */}
+              {workflowState === 'REJECTED' && (
+                <div style={{ padding: '20px', background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: '12px', color: '#f87171' }}>
+                  <AlertCircle size={28} style={{ margin: '0 auto 8px', display: 'block' }} />
+                  <p style={{ margin: 0, fontWeight: 700, fontSize: '1.05rem' }}>Admission Request Declined</p>
+                  <span style={{ fontSize: '0.85rem', color: '#cbd5e1', display: 'block', marginTop: '4px' }}>
+                    The host declined your request to join this session.
+                  </span>
+                  <button
+                    type="button"
+                    className="og-btn-secondary"
+                    style={{ marginTop: '14px', width: '100%' }}
+                    onClick={() => setWorkflowState('INVITED')}
+                  >
+                    Request Again
+                  </button>
+                </div>
+              )}
+
+              {/* 6. EXPIRED / REVOKED */}
+              {workflowState === 'EXPIRED' && (
+                <div style={{ padding: '20px', background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: '12px', color: '#fbbf24' }}>
+                  <AlertCircle size={28} style={{ margin: '0 auto 8px', display: 'block' }} />
+                  <p style={{ margin: 0, fontWeight: 700, fontSize: '1.05rem' }}>Invitation Expired or Revoked</p>
+                  <span style={{ fontSize: '0.85rem', color: '#cbd5e1', display: 'block', marginTop: '4px' }}>
+                    {workflowError || 'This invitation is no longer active. Please request a fresh invitation link from the host.'}
+                  </span>
+                  <button
+                    type="button"
+                    className="og-btn-secondary"
+                    style={{ marginTop: '14px', width: '100%' }}
+                    onClick={() => navigate('/friends')}
+                  >
+                    Go to Listening Rooms
+                  </button>
+                </div>
+              )}
+
+              {/* 7. ROOM_FULL (Capacity 10/10) */}
+              {workflowState === 'ROOM_FULL' && (
+                <div style={{ padding: '20px', background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: '12px', color: '#fbbf24' }}>
+                  <Users size={28} style={{ margin: '0 auto 8px', display: 'block' }} />
+                  <p style={{ margin: 0, fontWeight: 700, fontSize: '1.05rem' }}>Listening Room Full (10/10)</p>
+                  <span style={{ fontSize: '0.85rem', color: '#cbd5e1', display: 'block', marginTop: '4px' }}>
+                    This room has reached its maximum capacity of 10 participants.
+                  </span>
+                  <button
+                    type="button"
+                    className="og-btn-secondary"
+                    style={{ marginTop: '14px', width: '100%' }}
+                    onClick={() => navigate('/friends')}
+                  >
+                    Explore OG MUSIC
+                  </button>
+                </div>
+              )}
+
+              {/* 8. FAILED: Error with real Retry Joining Room action */}
+              {workflowState === 'FAILED' && (
+                <div style={{ padding: '20px', background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: '12px', color: '#f87171' }}>
+                  <AlertCircle size={28} style={{ margin: '0 auto 8px', display: 'block' }} />
+                  <p style={{ margin: 0, fontWeight: 700, fontSize: '1.05rem' }}>Connection Failed</p>
+                  <span style={{ fontSize: '0.85rem', color: '#cbd5e1', display: 'block', marginTop: '4px' }}>
+                    {workflowError || 'Unable to join the listening room.'}
+                  </span>
+                  <button
+                    type="button"
+                    className="og-btn-primary hover-lift"
+                    style={{ marginTop: '14px', width: '100%' }}
+                    onClick={handleRetryJoin}
+                    disabled={isJoiningRoom}
+                  >
+                    <RefreshCw size={16} /> {isJoiningRoom ? 'Connecting...' : 'Retry Joining Room'}
+                  </button>
                 </div>
               )}
             </div>
@@ -306,20 +570,31 @@ export const Friends = () => {
           {/* Main Room Card */}
           <div className={`friends-card ${activeRoom ? 'active-room-box' : ''}`}>
             <div className="friends-card-header">
-              <div>
-                <h2 className="friends-card-title">
-                  <Radio size={20} color="var(--brand-red)" />
-                  {activeRoom ? activeRoom.name : 'Start a Listening Session'}
-                </h2>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                 {activeRoom && (
-                  <p style={{ margin: '4px 0 0', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-                    {isHost ? (
-                      <span>You are hosting this session</span>
+                  <div className="participant-avatar" style={{ width: '44px', height: '44px', fontSize: '1.1rem', flexShrink: 0 }}>
+                    {activeRoom.hostPhotoURL ? (
+                      <img src={activeRoom.hostPhotoURL} alt={activeRoom.hostName} style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
                     ) : (
-                      <span>Hosted by <strong style={{ color: '#fff' }}>{activeRoom.hostName || 'Room Host'}</strong></span>
+                      activeRoom.hostName ? activeRoom.hostName.charAt(0).toUpperCase() : 'H'
                     )}
-                  </p>
+                  </div>
                 )}
+                <div>
+                  <h2 className="friends-card-title">
+                    <Radio size={20} color="var(--brand-red)" />
+                    {activeRoom ? activeRoom.name : 'Start a Listening Session'}
+                  </h2>
+                  {activeRoom && (
+                    <p style={{ margin: '4px 0 0', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+                      {isHost ? (
+                        <span>You are hosting this session (Authoritative Controller)</span>
+                      ) : (
+                        <span>Hosted by <strong style={{ color: '#fff' }}>{activeRoom.hostName || 'Room Host'}</strong></span>
+                      )}
+                    </p>
+                  )}
+                </div>
               </div>
               {activeRoom && (
                 <div className="active-room-status-badge">
@@ -430,9 +705,24 @@ export const Friends = () => {
                         alt={activeRoom.currentTrack.title}
                         className="shared-track-cover"
                       />
-                      <div className="shared-track-info">
+                      <div className="shared-track-info" style={{ flex: 1, minWidth: 0 }}>
                         <p className="shared-track-title">{activeRoom.currentTrack.title}</p>
                         <p className="shared-track-artist">{activeRoom.currentTrack.artistName}</p>
+                        
+                        {/* Live Synchronized Progress Bar */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '6px', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                          <span>{formatDuration(player.currentTime)}</span>
+                          <div style={{ flex: 1, height: '4px', background: 'rgba(255,255,255,0.1)', borderRadius: '2px', overflow: 'hidden' }}>
+                            <div style={{
+                              width: `${(player.duration > 0 || activeRoom.currentTrack.duration) ? Math.min(100, (player.currentTime / (player.duration || activeRoom.currentTrack.duration || 1)) * 100) : 0}%`,
+                              height: '100%',
+                              background: 'var(--brand-red)',
+                              transition: 'width 0.2s linear'
+                            }} />
+                          </div>
+                          <span>{formatDuration(player.duration || activeRoom.currentTrack.duration || 0)}</span>
+                        </div>
+
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '6px' }}>
                           {(() => {
                             if (isHost) {
@@ -553,6 +843,64 @@ export const Friends = () => {
                   )}
                 </div>
 
+                {/* Host Controlled Room Queue */}
+                {activeRoom.queue && activeRoom.queue.length > 0 && (
+                  <div style={{ marginTop: '16px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                      <span style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', fontWeight: 700 }}>
+                        Room Queue ({activeRoom.queue.length} songs) • Host Controlled
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '180px', overflowY: 'auto', paddingRight: '4px' }}>
+                      {activeRoom.queue.map((item, idx) => {
+                        const isCurrent = idx === (activeRoom.queueIndex ?? 0);
+                        return (
+                          <div
+                            key={item.id || idx}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              padding: '8px 12px',
+                              background: isCurrent ? 'rgba(220,38,38,0.18)' : 'rgba(255,255,255,0.03)',
+                              border: isCurrent ? '1px solid rgba(220,38,38,0.4)' : '1px solid rgba(255,255,255,0.05)',
+                              borderRadius: '8px',
+                            }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0, flex: 1 }}>
+                              <span style={{ fontSize: '0.75rem', fontWeight: 700, color: isCurrent ? 'var(--brand-red)' : 'var(--text-muted)', width: '18px', textAlign: 'center' }}>
+                                {isCurrent ? '▶' : idx + 1}
+                              </span>
+                              <img
+                                src={item.song.coverUrl || '/placeholder.png'}
+                                alt={item.song.title}
+                                style={{ width: '32px', height: '32px', borderRadius: '4px', objectFit: 'cover' }}
+                              />
+                              <div style={{ minWidth: 0, flex: 1 }}>
+                                <p style={{ margin: 0, fontSize: '0.82rem', fontWeight: 600, color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                  {item.song.title}
+                                </p>
+                                <p style={{ margin: 0, fontSize: '0.72rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                  {item.song.artistName}
+                                </p>
+                              </div>
+                            </div>
+                            {isCurrent ? (
+                              <span style={{ fontSize: '0.68rem', color: 'var(--brand-red)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>
+                                Playing Now
+                              </span>
+                            ) : (
+                              <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                                {formatDuration(item.song.duration || 0)}
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
                 {/* Participants */}
                 <div>
                   {/* Real Multi-User Participant Metrics */}
@@ -560,11 +908,26 @@ export const Friends = () => {
                     const participantsList = Object.values(activeRoom.participants || {});
                     const acceptedMembersCount = participantsList.length;
                     const onlineMembersCount = participantsList.filter(p => Date.now() - (p.lastHeartbeat || 0) < 30000).length;
-                    const playingMembersCount = participantsList.filter(p => p.playbackState === 'playing' || (p.role === 'host' && activeRoom.playbackState === 'playing')).length;
+                    const playingMembersCount = participantsList.filter(p => {
+                      const isOnline = Date.now() - (p.lastHeartbeat || 0) < 30000;
+                      if (!isOnline) return false;
+                      if (p.role === 'host') {
+                        return activeRoom.playbackState === 'playing' && player.playbackVerifiedState === 'PLAYING';
+                      }
+                      return p.playbackState === 'playing';
+                    }).length;
+                    const inAudioSyncCount = participantsList.filter(p => {
+                      const isOnline = Date.now() - (p.lastHeartbeat || 0) < 30000;
+                      if (!isOnline) return false;
+                      if (p.role === 'host') {
+                        return activeRoom.playbackState === 'playing';
+                      }
+                      return p.playbackState === 'playing';
+                    }).length;
 
                     return (
                       <>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(100px, 1fr))', gap: '8px', margin: '4px 0 12px' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(95px, 1fr))', gap: '8px', margin: '4px 0 12px' }}>
                           <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '8px', padding: '8px 10px', textAlign: 'center' }}>
                             <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Accepted</div>
                             <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#fff' }}>{acceptedMembersCount} / {activeRoom.maxCapacity || 10}</div>
@@ -577,8 +940,12 @@ export const Friends = () => {
                             </div>
                           </div>
                           <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '8px', padding: '8px 10px', textAlign: 'center' }}>
+                            <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Currently Playing</div>
+                            <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#4ade80' }}>{playingMembersCount}</div>
+                          </div>
+                          <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '8px', padding: '8px 10px', textAlign: 'center' }}>
                             <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>In Audio Sync</div>
-                            <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#38bdf8' }}>{playingMembersCount}</div>
+                            <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#38bdf8' }}>{inAudioSyncCount}</div>
                           </div>
                           {isHost && (
                             <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '8px', padding: '8px 10px', textAlign: 'center' }}>
@@ -595,7 +962,11 @@ export const Friends = () => {
                               <div key={p.id} className="participant-chip">
                                 <div className="participant-left">
                                   <div className="participant-avatar" style={{ position: 'relative' }}>
-                                    {p.displayName ? p.displayName.charAt(0).toUpperCase() : 'U'}
+                                    {p.photoURL ? (
+                                      <img src={p.photoURL} alt={p.displayName} style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
+                                    ) : (
+                                      p.displayName ? p.displayName.charAt(0).toUpperCase() : 'U'
+                                    )}
                                     <span style={{
                                       position: 'absolute',
                                       bottom: '-2px',
