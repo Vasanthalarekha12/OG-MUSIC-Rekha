@@ -41,13 +41,14 @@ export const getAuthErrorMessage = (error: unknown): string => {
     case 'auth/invalid-email':
       return 'Please enter a valid email address.';
     case 'auth/popup-closed-by-user':
-      return 'Google sign-in was cancelled.';
+    case 'auth/redirect-cancelled-by-user':
+      return 'Google sign-in was cancelled. Please try again.';
     case 'auth/cancelled-popup-request':
       return 'Previous Google sign-in request was cancelled.';
     case 'auth/popup-blocked':
       return 'Pop-up was blocked by your browser. Please allow pop-ups for this site or use redirect.';
     case 'auth/network-request-failed':
-      return 'Network error. Please check your internet connection and retry.';
+      return 'Network connection error. Please verify your internet connection and try again.';
     case 'auth/too-many-requests':
       return 'Too many unsuccessful attempts. Access temporarily disabled. Please reset your password or try again later.';
     case 'auth/expired-action-code':
@@ -63,6 +64,39 @@ export const getAuthErrorMessage = (error: unknown): string => {
     default:
       return authError.message || 'Authentication failed. Please try again.';
   }
+};
+
+const REDIRECT_DESTINATION_KEY = 'og_auth_redirect_from';
+const PENDING_INVITE_KEY = 'og_pending_invite_url';
+
+export const setAuthRedirectDestination = (url: string): void => {
+  if (!url || url === '/login' || url === '/register') return;
+  try {
+    localStorage.setItem(REDIRECT_DESTINATION_KEY, url);
+    sessionStorage.setItem(REDIRECT_DESTINATION_KEY, url);
+  } catch {}
+};
+
+export const getAuthRedirectDestination = (): string | null => {
+  try {
+    const fromStorage = localStorage.getItem(REDIRECT_DESTINATION_KEY) ||
+      sessionStorage.getItem(REDIRECT_DESTINATION_KEY) ||
+      localStorage.getItem(PENDING_INVITE_KEY) ||
+      sessionStorage.getItem(PENDING_INVITE_KEY);
+    if (fromStorage && fromStorage !== '/login' && fromStorage !== '/register') {
+      return fromStorage;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+};
+
+export const clearAuthRedirectDestination = (): void => {
+  try {
+    localStorage.removeItem(REDIRECT_DESTINATION_KEY);
+    sessionStorage.removeItem(REDIRECT_DESTINATION_KEY);
+  } catch {}
 };
 
 export const isFirebaseConfigured = (): boolean => {

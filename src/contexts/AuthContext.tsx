@@ -2,11 +2,13 @@ import { createContext, useContext, useState, useEffect } from 'react';
 import type { ReactNode } from 'react';
 import type { User } from '../types';
 import { recommendationService } from '../services/recommendationService';
-import { authService } from '../services/firebase/authService';
+import { authService, getAuthErrorMessage } from '../services/firebase/authService';
 
 interface AuthContextType {
   user: User | null;
   isLoading: boolean;
+  authError: string | null;
+  setAuthError: (error: string | null) => void;
   isConfigured: boolean;
   login: (email: string, password: string) => Promise<User>;
   register: (email: string, password: string, displayName?: string) => Promise<User>;
@@ -22,41 +24,76 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
   const isConfigured = authService.isConfigured();
 
   useEffect(() => {
-    let unsubscribe: () => void = () => {};
+    let isMounted = true;
+    let redirectResolved = false;
+    let initialAuthFired = false;
+    let redirectUserFound: User | null = null;
 
-    // 1. Process Google OAuth redirect completion if returning from Google sign-in
-    authService.handleRedirectResult().then(redirectUser => {
-      if (redirectUser) {
-        setUser(redirectUser);
-        recommendationService.setUser(redirectUser.id);
+    const finishLoadingIfReady = () => {
+      if (isMounted && redirectResolved && initialAuthFired) {
         setIsLoading(false);
-
-        const returnUrl = sessionStorage.getItem('og_auth_redirect_from') || sessionStorage.getItem('og_pending_invite_url');
-        if (returnUrl) {
-          sessionStorage.removeItem('og_auth_redirect_from');
-          window.location.replace(returnUrl);
-        }
       }
-    }).catch(err => {
-      console.warn('Google redirect resolution error:', err);
-    });
+    };
+
+    // 1. Process Google OAuth redirect completion if returning from mobile Google sign-in
+    authService.handleRedirectResult()
+      .then(redirectUser => {
+        if (!isMounted) return;
+        redirectResolved = true;
+        if (redirectUser) {
+          redirectUserFound = redirectUser;
+          setUser(redirectUser);
+          recommendationService.setUser(redirectUser.id);
+          setIsLoading(false);
+        } else {
+          finishLoadingIfReady();
+        }
+      })
+      .catch(err => {
+        if (!isMounted) return;
+        redirectResolved = true;
+        console.error('Google redirect resolution error:', err);
+        // Ignore user cancellation, otherwise surface actionable error
+        if (err?.code !== 'auth/redirect-cancelled-by-user' && err?.code !== 'auth/popup-closed-by-user') {
+          setAuthError(getAuthErrorMessage(err));
+        }
+        finishLoadingIfReady();
+      });
 
     // 2. Subscribe to Firebase real auth state
-    unsubscribe = authService.onAuthStateChanged((currentUser) => {
-      setUser(currentUser);
-      recommendationService.setUser(currentUser?.id);
-      setIsLoading(false);
+    const unsubscribe = authService.onAuthStateChanged((currentUser) => {
+      if (!isMounted) return;
+      initialAuthFired = true;
+
+      if (currentUser) {
+        setUser(currentUser);
+        recommendationService.setUser(currentUser.id);
+        setIsLoading(false);
+      } else {
+        // If redirect already found a user, don't clear it
+        if (!redirectUserFound) {
+          setUser(null);
+          recommendationService.setUser(undefined);
+        }
+        finishLoadingIfReady();
+      }
     });
 
-    // Safety timeout: ensure loading state resolves in maximum 2.5s even if Firebase is unreachable
+    // Safety timeout: ensure loading state resolves in maximum 2.5s even if network stalls
     const safetyTimer = setTimeout(() => {
-      setIsLoading(false);
+      if (isMounted) {
+        redirectResolved = true;
+        initialAuthFired = true;
+        setIsLoading(false);
+      }
     }, 2500);
 
     return () => {
+      isMounted = false;
       unsubscribe();
       clearTimeout(safetyTimer);
     };
@@ -105,6 +142,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     <AuthContext.Provider value={{
       user,
       isLoading,
+      authError,
+      setAuthError,
       isConfigured,
       login,
       register,

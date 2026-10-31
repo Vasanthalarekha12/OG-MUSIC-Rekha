@@ -1,14 +1,19 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { AuthLayout } from './AuthLayout';
 import { useAuth } from '../../contexts/AuthContext';
-import { getAuthErrorMessage } from '../../services/firebase/authService';
+import {
+  getAuthErrorMessage,
+  setAuthRedirectDestination,
+  getAuthRedirectDestination,
+  clearAuthRedirectDestination
+} from '../../services/firebase/authService';
 import { Mail, Lock, User as UserIcon, Eye, EyeOff, AlertCircle, Loader2 } from 'lucide-react';
 
 export const Register: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { register, loginWithGoogle } = useAuth();
+  const { user, isLoading, authError, setAuthError, register, loginWithGoogle } = useAuth();
 
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
@@ -19,14 +24,28 @@ export const Register: React.FC = () => {
   const [googleLoading, setGoogleLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Return to previous route (such as /friends/invite/:token) or default to /friends
-  const from = typeof (location.state as any)?.from === 'string'
-    ? (location.state as any).from
-    : (location.state as any)?.from?.pathname || sessionStorage.getItem('og_pending_invite_url') || '/friends';
+  // Return to previous route (such as /friends/invite/:token) or default to /home
+  const rawFrom = (location.state as any)?.from;
+  const parsedFrom = typeof rawFrom === 'string'
+    ? rawFrom
+    : rawFrom?.pathname || getAuthRedirectDestination() || '/home';
+  const destination = (parsedFrom === '/login' || parsedFrom === '/register') ? '/home' : parsedFrom;
+
+  // Auto-redirect authenticated user away from register page
+  useEffect(() => {
+    if (!isLoading && user) {
+      clearAuthRedirectDestination();
+      navigate(destination, { replace: true });
+    }
+  }, [user, isLoading, destination, navigate]);
+
+  // Sync authError from redirect result if present
+  const displayError = error || authError;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setAuthError(null);
 
     if (!email.trim() || !password) {
       setError('Please provide an email address and choose a password.');
@@ -46,7 +65,8 @@ export const Register: React.FC = () => {
     try {
       setLoading(true);
       await register(email, password, displayName);
-      navigate(from, { replace: true });
+      clearAuthRedirectDestination();
+      navigate(destination, { replace: true });
     } catch (err) {
       setError(getAuthErrorMessage(err));
     } finally {
@@ -56,13 +76,13 @@ export const Register: React.FC = () => {
 
   const handleGoogleSignIn = async () => {
     setError(null);
+    setAuthError(null);
     try {
       setGoogleLoading(true);
-      if (from) {
-        sessionStorage.setItem('og_auth_redirect_from', from);
-      }
+      setAuthRedirectDestination(destination);
       await loginWithGoogle();
-      navigate(from, { replace: true });
+      clearAuthRedirectDestination();
+      navigate(destination, { replace: true });
     } catch (err: any) {
       if (err?.message?.includes('Redirecting')) {
         // Keep loading state while browser redirects to Google account chooser
@@ -73,13 +93,43 @@ export const Register: React.FC = () => {
     }
   };
 
+  // While resolving authentication session or already authenticated, render sleek brand loader
+  if (isLoading || user) {
+    return (
+      <div style={{
+        minHeight: '100vh',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#050505',
+        color: '#FFFFFF'
+      }}>
+        <div style={{
+          width: '72px',
+          height: '72px',
+          borderRadius: '16px',
+          overflow: 'hidden',
+          marginBottom: '20px',
+          boxShadow: '0 8px 32px rgba(220, 38, 38, 0.4)'
+        }}>
+          <img src="/icon-192.png" alt="OG MUSIC" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+        </div>
+        <Loader2 size={28} className="spin-animation" style={{ color: 'var(--brand-red, #DC2626)', marginBottom: '16px' }} />
+        <p style={{ fontSize: '15px', fontWeight: 600, color: 'rgba(255, 255, 255, 0.85)' }}>
+          {user ? 'Entering OG MUSIC...' : 'Authenticating...'}
+        </p>
+      </div>
+    );
+  }
+
   return (
     <AuthLayout
       title="Create Your Account"
       subtitle="Join MARUDHAM OG MUSIC for personal favorites, playlists, and tailored recommendations"
     >
       {/* Error Banner */}
-      {error && (
+      {displayError && (
         <div
           role="alert"
           style={{
@@ -96,7 +146,7 @@ export const Register: React.FC = () => {
           }}
         >
           <AlertCircle size={18} style={{ flexShrink: 0 }} />
-          <span>{error}</span>
+          <span>{displayError}</span>
         </div>
       )}
 

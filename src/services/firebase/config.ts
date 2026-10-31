@@ -1,8 +1,13 @@
-import { initializeApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
+import { initializeApp, getApps, getApp, type FirebaseApp } from 'firebase/app';
+import {
+  getAuth,
+  initializeAuth,
+  browserLocalPersistence,
+  indexedDBLocalPersistence,
+  browserPopupRedirectResolver,
+  type Auth
+} from 'firebase/auth';
 import { getFirestore, Firestore } from 'firebase/firestore';
-import type { FirebaseApp } from 'firebase/app';
-import type { Auth } from 'firebase/auth';
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyCQQ-rkBouLcw-EsR64ftZjt0eK2imaI04",
@@ -14,15 +19,26 @@ const firebaseConfig = {
   measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || "G-9HS5QE0XZN",
 };
 
-// Initialize Firebase only if config is present to prevent crashes during dev setup
+// Initialize Firebase only once to prevent duplicate app instances
 let app: FirebaseApp | undefined;
 let auth: Auth | undefined;
 let db: Firestore | undefined;
 
 try {
   if (firebaseConfig.apiKey) {
-    app = initializeApp(firebaseConfig);
-    auth = getAuth(app);
+    app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
+
+    // Use initializeAuth with robust mobile persistence (indexedDB with localStorage fallback)
+    try {
+      auth = initializeAuth(app, {
+        persistence: [indexedDBLocalPersistence, browserLocalPersistence],
+        popupRedirectResolver: browserPopupRedirectResolver,
+      });
+    } catch {
+      // If already initialized (e.g. fast-refresh / HMR)
+      auth = getAuth(app);
+    }
+
     db = getFirestore(app);
   } else {
     console.warn('Firebase configuration missing (VITE_FIREBASE_API_KEY not defined).');
