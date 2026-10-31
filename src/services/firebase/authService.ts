@@ -353,20 +353,21 @@ export const authService = {
     provider.addScope('profile');
     provider.addScope('email');
 
-    // On mobile touch devices (iOS Safari, Android Chrome), popups are easily blocked or killed
-    const isMobile = typeof window !== 'undefined' && /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-
-    if (isMobile) {
-      await signInWithRedirect(auth, provider);
-      throw new Error('Redirecting to Google Sign-In...');
-    }
-
+    // Attempt popup first (works directly from user tap on iOS Safari, Android Chrome, and desktop without third-party cookie blocking)
     try {
       const cred = await signInWithPopup(auth, provider);
       return await this._syncGoogleUserProfile(cred.user);
     } catch (error: any) {
-      // If popup was blocked or prematurely closed by browser, fall back to redirect
-      if (error?.code === 'auth/popup-blocked' || error?.code === 'auth/cancelled-popup-request') {
+      // If user intentionally closed the popup, re-throw as cancelled
+      if (error?.code === 'auth/popup-closed-by-user') {
+        throw error;
+      }
+      // If popup was blocked by browser or environment does not support popups, fall back to redirect
+      if (
+        error?.code === 'auth/popup-blocked' ||
+        error?.code === 'auth/cancelled-popup-request' ||
+        error?.code === 'auth/operation-not-supported-in-this-environment'
+      ) {
         await signInWithRedirect(auth, provider);
         throw new Error('Redirecting to Google Sign-In...');
       }
