@@ -9,6 +9,7 @@ import {
   GoogleAuthProvider,
   signInWithPopup,
   signInWithRedirect,
+  getRedirectResult,
   updateProfile,
   type User as FirebaseUser,
   type AuthError
@@ -33,16 +34,20 @@ export const getAuthErrorMessage = (error: unknown): string => {
       return 'Invalid email or password. Please check your credentials.';
     case 'auth/email-already-in-use':
       return 'An account already exists with this email. Try signing in instead.';
+    case 'auth/account-exists-with-different-credential':
+      return 'An account already exists with this email using a different sign-in method. Please sign in using your original method.';
     case 'auth/weak-password':
       return 'Password is too weak. Please use at least 6 characters.';
     case 'auth/invalid-email':
       return 'Please enter a valid email address.';
     case 'auth/popup-closed-by-user':
       return 'Google sign-in was cancelled.';
+    case 'auth/cancelled-popup-request':
+      return 'Previous Google sign-in request was cancelled.';
     case 'auth/popup-blocked':
       return 'Pop-up was blocked by your browser. Please allow pop-ups for this site or use redirect.';
     case 'auth/network-request-failed':
-      return 'Network error. Please check your internet connection.';
+      return 'Network error. Please check your internet connection and retry.';
     case 'auth/too-many-requests':
       return 'Too many unsuccessful attempts. Access temporarily disabled. Please reset your password or try again later.';
     case 'auth/expired-action-code':
@@ -50,9 +55,11 @@ export const getAuthErrorMessage = (error: unknown): string => {
     case 'auth/invalid-action-code':
       return 'This password reset link is invalid or has already been used.';
     case 'auth/operation-not-allowed':
-      return 'This sign-in method is not enabled in Firebase Console. Please enable Email/Password or Google provider.';
+      return 'Google Sign-In is not enabled in Firebase Console. Go to Authentication > Sign-in method and enable the Google provider.';
     case 'auth/unauthorized-domain':
-      return 'This domain is not authorized in Firebase Console for OAuth operations.';
+      return 'Domain (og-music-rekha.vercel.app) is not authorized in Firebase Console. Please add it in Firebase Authentication > Settings > Authorized Domains.';
+    case 'auth/configuration-not-found':
+      return 'Firebase Authentication configuration not found. Please verify Google provider is enabled in Firebase Console.';
     default:
       return authError.message || 'Authentication failed. Please try again.';
   }
@@ -66,6 +73,14 @@ export const isFirebaseConfigured = (): boolean => {
 export const mapFirebaseUser = async (fbUser: FirebaseUser): Promise<User> => {
   let displayName = fbUser.displayName || '';
   let photoURL = fbUser.photoURL || '';
+
+  // Extract from providerData if top-level fields are missing
+  if ((!displayName || !photoURL) && fbUser.providerData?.length) {
+    for (const p of fbUser.providerData) {
+      if (!displayName && p.displayName) displayName = p.displayName;
+      if (!photoURL && p.photoURL) photoURL = p.photoURL;
+    }
+  }
 
   // Check if profile details exist in Firestore users collection
   if (db) {
@@ -94,43 +109,12 @@ const DEV_USERS_KEY = 'og_music_dev_users';
 const DEV_CURRENT_USER_KEY = 'og_music_current_user';
 const devAuthListeners = new Set<(user: User | null) => void>();
 
-const DEFAULT_ACCOUNTS: Record<string, { user: User; passwordHash: string }> = {
-  'listener@ogmusic.com': {
-    user: {
-      id: 'usr_listener_default',
-      email: 'listener@ogmusic.com',
-      displayName: 'Listener',
-      photoURL: 'https://api.dicebear.com/7.x/bottts/svg?seed=listener'
-    },
-    passwordHash: btoa('password123')
-  },
-  'friend@ogmusic.com': {
-    user: {
-      id: 'usr_friend_default',
-      email: 'friend@ogmusic.com',
-      displayName: 'OG Friend',
-      photoURL: 'https://api.dicebear.com/7.x/bottts/svg?seed=friend'
-    },
-    passwordHash: btoa('password123')
-  },
-  'host.rahul@ogmusic.com': {
-    user: {
-      id: 'usr_rahul_default',
-      email: 'host.rahul@ogmusic.com',
-      displayName: 'Rahul Host',
-      photoURL: 'https://api.dicebear.com/7.x/bottts/svg?seed=rahul'
-    },
-    passwordHash: btoa('password123')
-  }
-};
-
 const getStoredDevUsers = (): Record<string, { user: User; passwordHash: string }> => {
   try {
     const raw = localStorage.getItem(DEV_USERS_KEY);
-    const stored = raw ? JSON.parse(raw) : {};
-    return { ...DEFAULT_ACCOUNTS, ...stored };
+    return raw ? JSON.parse(raw) : {};
   } catch {
-    return DEFAULT_ACCOUNTS;
+    return {};
   }
 };
 
@@ -247,6 +231,83 @@ export const authService = {
     return mapFirebaseUser(cred.user);
   },
 
+  // Synchronize Google authenticated user with canonical Firestore user document
+  async _syncGoogleUserProfile(fbUser: FirebaseUser): Promise<User> {
+    let realDisplayName = fbUser.displayName || '';
+    let realPhotoURL = fbUser.photoURL || '';
+
+    // Extract from providerData if top-level fields are missing
+    if ((!realDisplayName || !realPhotoURL) && fbUser.providerData?.length) {
+      for (const p of fbUser.providerData) {
+        if (!realDisplayName && p.displayName) realDisplayName = p.displayName;
+        if (!realPhotoURL && p.photoURL) realPhotoURL = p.photoURL;
+      }
+    }
+
+    // Inspect Firestore to preserve existing customizations
+    let existingProfile: any = null;
+    if (db) {
+      try {
+        const snap = await getDoc(doc(db, 'users', fbUser.uid));
+        if (snap.exists()) {
+          existingProfile = snap.data();
+          if (!realDisplayName && existingProfile.displayName) {
+            realDisplayName = existingProfile.displayName;
+          }
+          if (!realPhotoURL && existingProfile.photoURL) {
+            realPhotoURL = existingProfile.photoURL;
+          }
+        }
+      } catch (err) {
+        console.warn('Firestore read error in _syncGoogleUserProfile:', err);
+      }
+    }
+
+    if (!realDisplayName) {
+      realDisplayName = fbUser.email ? fbUser.email.split('@')[0] : 'User';
+    }
+
+    // Save/merge the real Google user profile to Firestore
+    if (db) {
+      try {
+        await setDoc(doc(db, 'users', fbUser.uid), {
+          id: fbUser.uid,
+          email: fbUser.email || existingProfile?.email || '',
+          displayName: realDisplayName,
+          photoURL: realPhotoURL || null,
+          lastLoginAt: serverTimestamp(),
+          authProvider: 'google.com',
+          updatedAt: serverTimestamp(),
+          createdAt: existingProfile?.createdAt || serverTimestamp(),
+        }, { merge: true });
+      } catch (err) {
+        console.warn('Firestore sync error in _syncGoogleUserProfile:', err);
+      }
+    }
+
+    return {
+      id: fbUser.uid,
+      email: fbUser.email || '',
+      displayName: realDisplayName,
+      photoURL: realPhotoURL || undefined,
+    };
+  },
+
+  // Process incoming redirect results when returning from Google OAuth
+  async handleRedirectResult(): Promise<User | null> {
+    if (!auth) return null;
+    try {
+      const cred = await getRedirectResult(auth);
+      if (cred && cred.user) {
+        return await this._syncGoogleUserProfile(cred.user);
+      }
+      return null;
+    } catch (error) {
+      console.error('Redirect result resolution error:', error);
+      throw error;
+    }
+  },
+
   // Google Sign-In with popup and redirect fallback
   async signInWithGoogle(): Promise<User> {
     if (!auth) {
@@ -255,29 +316,23 @@ export const authService = {
 
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: 'select_account' });
+    provider.addScope('profile');
+    provider.addScope('email');
+
+    // On mobile touch devices (iOS Safari, Android Chrome), popups are easily blocked or killed
+    const isMobile = typeof window !== 'undefined' && /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
+    if (isMobile) {
+      await signInWithRedirect(auth, provider);
+      throw new Error('Redirecting to Google Sign-In...');
+    }
 
     try {
       const cred = await signInWithPopup(auth, provider);
-
-      // Preserve existing profile and merge google photo/name
-      if (db) {
-        try {
-          await setDoc(doc(db, 'users', cred.user.uid), {
-            id: cred.user.uid,
-            email: cred.user.email,
-            displayName: cred.user.displayName || cred.user.email?.split('@')[0],
-            photoURL: cred.user.photoURL,
-            lastLoginAt: serverTimestamp()
-          }, { merge: true });
-        } catch {
-          // Non-fatal
-        }
-      }
-
-      return mapFirebaseUser(cred.user);
+      return await this._syncGoogleUserProfile(cred.user);
     } catch (error: any) {
-      // If popup was blocked by browser, try redirect flow
-      if (error?.code === 'auth/popup-blocked') {
+      // If popup was blocked or prematurely closed by browser, fall back to redirect
+      if (error?.code === 'auth/popup-blocked' || error?.code === 'auth/cancelled-popup-request') {
         await signInWithRedirect(auth, provider);
         throw new Error('Redirecting to Google Sign-In...');
       }

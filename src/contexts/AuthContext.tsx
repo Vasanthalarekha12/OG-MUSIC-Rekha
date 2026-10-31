@@ -27,7 +27,24 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   useEffect(() => {
     let unsubscribe: () => void = () => {};
 
-    // Subscribe to Firebase real auth state
+    // 1. Process Google OAuth redirect completion if returning from Google sign-in
+    authService.handleRedirectResult().then(redirectUser => {
+      if (redirectUser) {
+        setUser(redirectUser);
+        recommendationService.setUser(redirectUser.id);
+        setIsLoading(false);
+
+        const returnUrl = sessionStorage.getItem('og_auth_redirect_from') || sessionStorage.getItem('og_pending_invite_url');
+        if (returnUrl) {
+          sessionStorage.removeItem('og_auth_redirect_from');
+          window.location.replace(returnUrl);
+        }
+      }
+    }).catch(err => {
+      console.warn('Google redirect resolution error:', err);
+    });
+
+    // 2. Subscribe to Firebase real auth state
     unsubscribe = authService.onAuthStateChanged((currentUser) => {
       setUser(currentUser);
       recommendationService.setUser(currentUser?.id);

@@ -46,11 +46,17 @@ export const Login: React.FC = () => {
     setError(null);
     try {
       setGoogleLoading(true);
+      if (from) {
+        sessionStorage.setItem('og_auth_redirect_from', from);
+      }
       await loginWithGoogle();
       navigate(from, { replace: true });
     } catch (err: any) {
+      if (err?.message?.includes('Redirecting')) {
+        // Keep loading state while browser redirects to Google account chooser
+        return;
+      }
       setError(getAuthErrorMessage(err));
-    } finally {
       setGoogleLoading(false);
     }
   };
