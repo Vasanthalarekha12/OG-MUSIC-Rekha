@@ -85,7 +85,7 @@ export const mapFirebaseUser = async (fbUser: FirebaseUser): Promise<User> => {
   return {
     id: fbUser.uid,
     email: fbUser.email || '',
-    displayName: displayName || (fbUser.email ? fbUser.email.split('@')[0] : 'OG Listener'),
+    displayName: displayName || (fbUser.email ? fbUser.email.split('@')[0] : 'User'),
     photoURL: photoURL || undefined,
   };
 };
@@ -99,7 +99,7 @@ const DEFAULT_ACCOUNTS: Record<string, { user: User; passwordHash: string }> = {
     user: {
       id: 'usr_listener_default',
       email: 'listener@ogmusic.com',
-      displayName: 'OG Listener',
+      displayName: 'Listener',
       photoURL: 'https://api.dicebear.com/7.x/bottts/svg?seed=listener'
     },
     passwordHash: btoa('password123')
@@ -170,7 +170,7 @@ export const authService = {
       const newUser: User = {
         id: userId,
         email: normalizedEmail,
-        displayName: displayName?.trim() || normalizedEmail.split('@')[0] || 'OG Listener',
+        displayName: displayName?.trim() || (normalizedEmail ? normalizedEmail.split('@')[0] : 'User'),
         photoURL: `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(userId)}`
       };
 
@@ -198,7 +198,7 @@ export const authService = {
         await setDoc(doc(db, 'users', cred.user.uid), {
           id: cred.user.uid,
           email: cred.user.email,
-          displayName: displayName?.trim() || cred.user.email?.split('@')[0] || 'OG Listener',
+          displayName: displayName?.trim() || (cred.user.email ? cred.user.email.split('@')[0] : 'User'),
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp()
         }, { merge: true });
@@ -365,7 +365,7 @@ export const authService = {
           callback({
             id: fbUser.uid,
             email: fbUser.email || '',
-            displayName: fbUser.displayName || fbUser.email?.split('@')[0] || 'OG Listener'
+            displayName: fbUser.displayName || (fbUser.email ? fbUser.email.split('@')[0] : 'User')
           });
         }
       } else {

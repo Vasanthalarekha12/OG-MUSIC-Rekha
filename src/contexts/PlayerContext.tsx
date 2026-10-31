@@ -21,6 +21,16 @@ export interface PlaybackBroadcastEvent {
   repeat?: 'off' | 'all' | 'one';
 }
 
+export type PlaybackVerifiedStatus =
+  | 'TRACK_SELECTED'
+  | 'SOURCE_RESOLVING'
+  | 'SOURCE_READY'
+  | 'BUFFERING'
+  | 'PLAYING'
+  | 'PAUSED'
+  | 'FAILED'
+  | 'RECONNECTING';
+
 interface PlayerContextType {
   currentTrack: Song | null;
   currentContext: DiscoveryContext | null;
@@ -36,6 +46,9 @@ interface PlayerContextType {
   loading: boolean;
   buffering: boolean;
   error: string | null;
+  playbackVerifiedState: PlaybackVerifiedStatus;
+  isAudioUnlocked: boolean;
+  unlockAudio: () => Promise<boolean>;
   
   play: (song?: Song, context?: DiscoveryContext) => void;
   playList: (songs: Song[], startIndex?: number, context?: DiscoveryContext) => void;
@@ -93,6 +106,8 @@ export const PlayerProvider = ({ children }: { children: ReactNode }) => {
   const [loading, setLoading] = useState(false);
   const [buffering, setBuffering] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [playbackVerifiedState, setPlaybackVerifiedState] = useState<PlaybackVerifiedStatus>('TRACK_SELECTED');
+  const [isAudioUnlocked, setIsAudioUnlocked] = useState<boolean>(true);
 
   const [playbackRate, setPlaybackRate] = useState(1);
   const [eqGains, setEqGainsState] = useState<number[]>(() => {
@@ -139,20 +154,43 @@ export const PlayerProvider = ({ children }: { children: ReactNode }) => {
         setDuration(audio.duration);
       }
       setLoading(false);
+      setPlaybackVerifiedState('SOURCE_READY');
     };
     
     const onTimeUpdate = () => {
       setCurrentTime(audio.currentTime);
     };
     
-    const onPlay = () => setIsPlaying(true);
-    const onPause = () => setIsPlaying(false);
+    const onPlay = () => {
+      setIsPlaying(true);
+    };
+
+    const onPlaying = () => {
+      setIsPlaying(true);
+      setLoading(false);
+      setBuffering(false);
+      setPlaybackVerifiedState('PLAYING');
+      setIsAudioUnlocked(true);
+    };
+
+    const onPause = () => {
+      setIsPlaying(false);
+      setPlaybackVerifiedState('PAUSED');
+    };
     
-    const onWaiting = () => setBuffering(true);
+    const onWaiting = () => {
+      setBuffering(true);
+      setPlaybackVerifiedState('BUFFERING');
+    };
+
     const onCanPlay = () => {
       setBuffering(false);
       setLoading(false);
+      if (playbackVerifiedState !== 'PLAYING') {
+        setPlaybackVerifiedState('SOURCE_READY');
+      }
     };
+
     const onError = () => {
       // If audio has no src or was cleared, ignore
       if (!audio.src || audio.src === window.location.href) return;
@@ -172,11 +210,13 @@ export const PlayerProvider = ({ children }: { children: ReactNode }) => {
       setLoading(false);
       setBuffering(false);
       setIsPlaying(false);
+      setPlaybackVerifiedState('FAILED');
     };
 
     audio.addEventListener('loadedmetadata', onLoadedMetadata);
     audio.addEventListener('timeupdate', onTimeUpdate);
     audio.addEventListener('play', onPlay);
+    audio.addEventListener('playing', onPlaying);
     audio.addEventListener('pause', onPause);
     audio.addEventListener('waiting', onWaiting);
     audio.addEventListener('canplay', onCanPlay);
@@ -186,12 +226,13 @@ export const PlayerProvider = ({ children }: { children: ReactNode }) => {
       audio.removeEventListener('loadedmetadata', onLoadedMetadata);
       audio.removeEventListener('timeupdate', onTimeUpdate);
       audio.removeEventListener('play', onPlay);
+      audio.removeEventListener('playing', onPlaying);
       audio.removeEventListener('pause', onPause);
       audio.removeEventListener('waiting', onWaiting);
       audio.removeEventListener('canplay', onCanPlay);
       audio.removeEventListener('error', onError);
     };
-  }, [currentTrack]);
+  }, [currentTrack, playbackVerifiedState]);
 
   // Sync volume and mute
   useEffect(() => {
@@ -319,10 +360,13 @@ export const PlayerProvider = ({ children }: { children: ReactNode }) => {
     audioEngine.audio.play().catch(e => {
       if (e.name === 'AbortError') return;
       if (e.name === 'NotAllowedError') {
-        setError('Autoplay restricted: Press play to start');
+        setIsAudioUnlocked(false);
+        setPlaybackVerifiedState('FAILED');
+        setError('Autoplay restricted: Tap "Enable Room Audio" to start listening');
       } else {
         console.error('Playback failed', e);
         setError('Playback failed — Audio source unavailable');
+        setPlaybackVerifiedState('FAILED');
       }
       setIsPlaying(false);
     });
@@ -334,6 +378,7 @@ export const PlayerProvider = ({ children }: { children: ReactNode }) => {
     setLoading(true);
     setCurrentTime(0);
     setDuration(song.duration || 0);
+    setPlaybackVerifiedState('SOURCE_RESOLVING');
     recommendationService.recordPlay(song);
 
     const broadcastTrack = (t: Song) => {
@@ -358,6 +403,7 @@ export const PlayerProvider = ({ children }: { children: ReactNode }) => {
     if (directYtId) {
       const fullSong: Song = { ...song, youtubeId: directYtId, sourceType: 'youtube' };
       setCurrentTrack(fullSong);
+      setPlaybackVerifiedState('SOURCE_READY');
       audioEngine.audio.pause();
       audioEngine.audio.removeAttribute('src');
       audioEngine.audio.load();
@@ -377,6 +423,7 @@ export const PlayerProvider = ({ children }: { children: ReactNode }) => {
         if (resolvedYtId) {
           const resolvedSong: Song = { ...song, youtubeId: resolvedYtId, sourceType: 'youtube' };
           setCurrentTrack(resolvedSong);
+          setPlaybackVerifiedState('SOURCE_READY');
           audioEngine.audio.pause();
           audioEngine.audio.removeAttribute('src');
           audioEngine.audio.load();
@@ -394,6 +441,7 @@ export const PlayerProvider = ({ children }: { children: ReactNode }) => {
     }
 
     // 3. Fallback to direct full audio
+    setPlaybackVerifiedState('SOURCE_READY');
     playDirectAudio(song);
     broadcastTrack(song);
   }, [playDirectAudio, isListenerMode, queue, queueIndex, isShuffle, repeatMode]);
@@ -816,6 +864,33 @@ export const PlayerProvider = ({ children }: { children: ReactNode }) => {
     }
   }, [currentTrack, togglePlay, previous, next]);
 
+  const unlockAudio = useCallback(async (): Promise<boolean> => {
+    try {
+      const ok = await audioEngine.initWebAudio();
+      setWebAudioSupported(ok);
+
+      const audio = audioEngine.audio;
+      audio.muted = false;
+      setIsAudioUnlocked(true);
+      setError(null);
+
+      if (currentTrack) {
+        if (currentTrack.sourceType === 'youtube' && ytPlayerRef.current) {
+          ytPlayerRef.current.playVideo();
+        } else if (audio.src) {
+          await audio.play();
+        } else {
+          loadAndPlayTrack(currentTrack);
+        }
+      }
+      return true;
+    } catch (e: any) {
+      console.warn('Unlock audio fallback:', e);
+      setIsAudioUnlocked(true);
+      return false;
+    }
+  }, [currentTrack, loadAndPlayTrack]);
+
   return (
     <PlayerContext.Provider
       value={{
@@ -833,6 +908,9 @@ export const PlayerProvider = ({ children }: { children: ReactNode }) => {
         loading,
         buffering,
         error,
+        playbackVerifiedState,
+        isAudioUnlocked,
+        unlockAudio,
         play,
         playList,
         pause,
@@ -897,8 +975,11 @@ export const PlayerProvider = ({ children }: { children: ReactNode }) => {
               setIsPlaying(true);
               setLoading(false);
               setBuffering(false);
+              setPlaybackVerifiedState('PLAYING');
+              setIsAudioUnlocked(true);
             } else if (e.data === 2) {
               setIsPlaying(false);
+              setPlaybackVerifiedState('PAUSED');
             } else if (e.data === 0) {
               if (repeatMode === 'one') {
                 e.target.seekTo(0);
@@ -908,6 +989,7 @@ export const PlayerProvider = ({ children }: { children: ReactNode }) => {
               }
             } else if (e.data === 3) {
               setBuffering(true);
+              setPlaybackVerifiedState('BUFFERING');
             }
           }}
           onError={(e) => {
@@ -918,6 +1000,7 @@ export const PlayerProvider = ({ children }: { children: ReactNode }) => {
               playDirectAudio(currentTrack);
             } else {
               setError('Playback unavailable');
+              setPlaybackVerifiedState('FAILED');
             }
           }}
         />

@@ -8,6 +8,7 @@ export interface RoomParticipant {
   role: 'host' | 'listener';
   joinedAt: number;
   lastHeartbeat: number;
+  playbackState?: 'idle' | 'buffering' | 'playing' | 'paused' | 'failed';
 }
 
 export interface ListeningRoom {

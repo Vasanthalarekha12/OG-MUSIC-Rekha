@@ -330,6 +330,37 @@ export const Friends = () => {
 
             {activeRoom ? (
               <>
+                {/* Mobile Autoplay Primer / Audio Unlock Banner */}
+                {!isHost && !player.isAudioUnlocked && (
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '12px',
+                    background: 'linear-gradient(135deg, rgba(220, 38, 38, 0.25) 0%, rgba(185, 28, 28, 0.15) 100%)',
+                    border: '1px solid rgba(239, 68, 68, 0.4)',
+                    borderRadius: '12px',
+                    padding: '12px 16px',
+                    boxShadow: '0 4px 16px rgba(220, 38, 38, 0.15)'
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <Volume2 size={22} color="#f87171" />
+                      <div>
+                        <p style={{ margin: 0, fontWeight: 700, fontSize: '0.88rem', color: '#fff' }}>Enable Synchronized Audio</p>
+                        <p style={{ margin: '2px 0 0', fontSize: '0.78rem', color: '#cbd5e1' }}>Tap once to authorize mobile Safari & Chrome background audio playback</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="og-btn-primary hover-lift"
+                      style={{ padding: '8px 16px', fontSize: '0.82rem', whiteSpace: 'nowrap' }}
+                      onClick={() => player.unlockAudio()}
+                    >
+                      Enable Room Audio
+                    </button>
+                  </div>
+                )}
+
                 {/* Live Role Badge */}
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px', width: '100%', minWidth: 0, boxSizing: 'border-box' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', minWidth: 0, maxWidth: '100%' }}>
@@ -347,7 +378,7 @@ export const Friends = () => {
                             type="button"
                             className="og-btn-primary hover-lift"
                             style={{ padding: '4px 10px', fontSize: '0.78rem' }}
-                            onClick={() => player.play()}
+                            onClick={() => player.unlockAudio()}
                           >
                             <Volume2 size={13} /> Tap to Sync Audio
                           </button>
@@ -403,9 +434,114 @@ export const Friends = () => {
                         <p className="shared-track-title">{activeRoom.currentTrack.title}</p>
                         <p className="shared-track-artist">{activeRoom.currentTrack.artistName}</p>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '6px' }}>
-                          <span style={{ fontSize: '0.78rem', color: activeRoom.playbackState === 'playing' ? '#4ade80' : '#f87171', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
-                            <Volume2 size={13} /> {activeRoom.playbackState === 'playing' ? 'Playing in Sync' : 'Paused by Host'}
-                          </span>
+                          {(() => {
+                            if (isHost) {
+                              switch (player.playbackVerifiedState) {
+                                case 'PLAYING':
+                                  return (
+                                    <span style={{ fontSize: '0.78rem', color: '#4ade80', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                      <Volume2 size={13} /> Broadcasting in Sync (Verified)
+                                    </span>
+                                  );
+                                case 'BUFFERING':
+                                  return (
+                                    <span style={{ fontSize: '0.78rem', color: '#facc15', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                      <RefreshCw size={13} /> Buffering Audio Stream...
+                                    </span>
+                                  );
+                                case 'SOURCE_RESOLVING':
+                                  return (
+                                    <span style={{ fontSize: '0.78rem', color: '#38bdf8', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                      <RefreshCw size={13} /> Resolving Audio Source...
+                                    </span>
+                                  );
+                                case 'SOURCE_READY':
+                                  return (
+                                    <span style={{ fontSize: '0.78rem', color: '#38bdf8', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                      <Check size={13} /> Stream Ready
+                                    </span>
+                                  );
+                                case 'PAUSED':
+                                  return (
+                                    <span style={{ fontSize: '0.78rem', color: '#94a3b8', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                      ⏸️ Room Paused by You
+                                    </span>
+                                  );
+                                case 'FAILED':
+                                  return (
+                                    <span style={{ fontSize: '0.78rem', color: '#ef4444', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                      <AlertCircle size={13} /> Stream Error (Tap track to retry)
+                                    </span>
+                                  );
+                                default:
+                                  return (
+                                    <span style={{ fontSize: '0.78rem', color: '#94a3b8' }}>
+                                      Track Selected
+                                    </span>
+                                  );
+                              }
+                            } else {
+                              if (activeRoom.playbackState === 'paused') {
+                                return (
+                                  <span style={{ fontSize: '0.78rem', color: '#94a3b8', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                    ⏸️ Paused by Host
+                                  </span>
+                                );
+                              }
+                              if (!player.isAudioUnlocked) {
+                                return (
+                                  <span style={{ fontSize: '0.78rem', color: '#f87171', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                    <AlertCircle size={13} /> Audio Locked — Tap "Enable Room Audio"
+                                  </span>
+                                );
+                              }
+                              switch (player.playbackVerifiedState) {
+                                case 'PLAYING':
+                                  return (
+                                    <span style={{ fontSize: '0.78rem', color: '#4ade80', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                      <Volume2 size={13} /> Playing in Verified Sync ({isSynced ? 'In Sync' : `Drift ±${syncDrift}s`})
+                                    </span>
+                                  );
+                                case 'BUFFERING':
+                                  return (
+                                    <span style={{ fontSize: '0.78rem', color: '#facc15', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                      <RefreshCw size={13} /> Buffering Stream...
+                                    </span>
+                                  );
+                                case 'SOURCE_RESOLVING':
+                                  return (
+                                    <span style={{ fontSize: '0.78rem', color: '#38bdf8', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                      <RefreshCw size={13} /> Resolving Track Stream...
+                                    </span>
+                                  );
+                                case 'SOURCE_READY':
+                                  return (
+                                    <span style={{ fontSize: '0.78rem', color: '#38bdf8', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                      <Check size={13} /> Ready to Play
+                                    </span>
+                                  );
+                                case 'FAILED':
+                                  return (
+                                    <span style={{ fontSize: '0.78rem', color: '#ef4444', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                      <AlertCircle size={13} /> Autoplay Blocked
+                                      <button
+                                        type="button"
+                                        onClick={() => player.unlockAudio()}
+                                        style={{ background: '#ef4444', color: '#fff', border: 'none', borderRadius: '4px', padding: '2px 8px', fontSize: '0.72rem', cursor: 'pointer', marginLeft: '6px' }}
+                                      >
+                                        Tap to Play
+                                      </button>
+                                    </span>
+                                  );
+                                default:
+                                  return (
+                                    <span style={{ fontSize: '0.78rem', color: '#94a3b8' }}>
+                                      Waiting for stream...
+                                    </span>
+                                  );
+                              }
+                            }
+                          })()}
                         </div>
                       </div>
                     </div>
@@ -419,56 +555,84 @@ export const Friends = () => {
 
                 {/* Participants */}
                 <div>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px', flexWrap: 'wrap', gap: '4px' }}>
-                    <span style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)', fontWeight: 700 }}>
-                      Participants ({Object.keys(activeRoom.participants).length} / {activeRoom.maxCapacity || 10})
-                    </span>
-                    <span style={{ fontSize: '0.75rem', color: '#4ade80', display: 'flex', alignItems: 'center', gap: '5px' }}>
-                      <span className="status-pulse-dot" style={{ width: '6px', height: '6px', background: '#4ade80' }} />
-                      {Object.values(activeRoom.participants).filter(p => Date.now() - (p.lastHeartbeat || 0) < 30000).length} Online
-                    </span>
-                  </div>
-                  <div className="participants-grid">
-                    {Object.values(activeRoom.participants).map((p) => {
-                      const isOnline = Date.now() - (p.lastHeartbeat || 0) < 30000;
-                      return (
-                        <div key={p.id} className="participant-chip">
-                          <div className="participant-left">
-                            <div className="participant-avatar" style={{ position: 'relative' }}>
-                              {p.displayName ? p.displayName.charAt(0).toUpperCase() : 'U'}
-                              <span style={{
-                                position: 'absolute',
-                                bottom: '-2px',
-                                right: '-2px',
-                                width: '8px',
-                                height: '8px',
-                                borderRadius: '50%',
-                                background: isOnline ? '#22c55e' : '#64748b',
-                                border: '2px solid #000'
-                              }} />
-                            </div>
-                            <div style={{ minWidth: 0 }}>
-                              <p className="participant-name">{p.displayName || 'OG Listener'}</p>
-                              <span className="participant-role">
-                                {p.role === 'host' ? '👑 Host' : '🎧 Listener'} • {isOnline ? 'Active' : 'Idle'}
-                              </span>
+                  {/* Real Multi-User Participant Metrics */}
+                  {(() => {
+                    const participantsList = Object.values(activeRoom.participants || {});
+                    const acceptedMembersCount = participantsList.length;
+                    const onlineMembersCount = participantsList.filter(p => Date.now() - (p.lastHeartbeat || 0) < 30000).length;
+                    const playingMembersCount = participantsList.filter(p => p.playbackState === 'playing' || (p.role === 'host' && activeRoom.playbackState === 'playing')).length;
+
+                    return (
+                      <>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(100px, 1fr))', gap: '8px', margin: '4px 0 12px' }}>
+                          <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '8px', padding: '8px 10px', textAlign: 'center' }}>
+                            <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Accepted</div>
+                            <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#fff' }}>{acceptedMembersCount} / {activeRoom.maxCapacity || 10}</div>
+                          </div>
+                          <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '8px', padding: '8px 10px', textAlign: 'center' }}>
+                            <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Online Now</div>
+                            <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#22c55e', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
+                              <span className="status-pulse-dot" style={{ width: '6px', height: '6px', background: '#22c55e' }} />
+                              {onlineMembersCount}
                             </div>
                           </div>
-                          {isHost && p.id !== user.id && (
-                            <button
-                              type="button"
-                              className="hover-lift"
-                              title="Remove participant"
-                              onClick={() => kickParticipant(p.id)}
-                              style={{ background: 'transparent', border: 'none', color: '#f87171', cursor: 'pointer', padding: '4px' }}
-                            >
-                              <Trash2 size={15} />
-                            </button>
+                          <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '8px', padding: '8px 10px', textAlign: 'center' }}>
+                            <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>In Audio Sync</div>
+                            <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#38bdf8' }}>{playingMembersCount}</div>
+                          </div>
+                          {isHost && (
+                            <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '8px', padding: '8px 10px', textAlign: 'center' }}>
+                              <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Pending</div>
+                              <div style={{ fontSize: '0.95rem', fontWeight: 700, color: pendingRequests.length > 0 ? '#ef4444' : '#94a3b8' }}>{pendingRequests.length}</div>
+                            </div>
                           )}
                         </div>
-                      );
-                    })}
-                  </div>
+
+                        <div className="participants-grid">
+                          {participantsList.map((p) => {
+                            const isOnline = Date.now() - (p.lastHeartbeat || 0) < 30000;
+                            return (
+                              <div key={p.id} className="participant-chip">
+                                <div className="participant-left">
+                                  <div className="participant-avatar" style={{ position: 'relative' }}>
+                                    {p.displayName ? p.displayName.charAt(0).toUpperCase() : 'U'}
+                                    <span style={{
+                                      position: 'absolute',
+                                      bottom: '-2px',
+                                      right: '-2px',
+                                      width: '8px',
+                                      height: '8px',
+                                      borderRadius: '50%',
+                                      background: isOnline ? '#22c55e' : '#64748b',
+                                      border: '2px solid #000'
+                                    }} />
+                                  </div>
+                                  <div style={{ minWidth: 0 }}>
+                                    <p className="participant-name">{p.displayName || (p.email ? p.email.split('@')[0] : 'Member')}</p>
+                                    <span className="participant-role">
+                                      {p.role === 'host' ? '👑 Host' : '🎧 Listener'} • {isOnline ? 'Active' : 'Idle'}
+                                      {p.playbackState && p.playbackState !== 'idle' ? ` • ${p.playbackState.toUpperCase()}` : ''}
+                                    </span>
+                                  </div>
+                                </div>
+                                {isHost && p.id !== user.id && (
+                                  <button
+                                    type="button"
+                                    className="hover-lift"
+                                    title="Remove participant"
+                                    onClick={() => kickParticipant(p.id)}
+                                    style={{ background: 'transparent', border: 'none', color: '#f87171', cursor: 'pointer', padding: '4px' }}
+                                  >
+                                    <Trash2 size={15} />
+                                  </button>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </>
+                    );
+                  })()}
                 </div>
               </>
             ) : (

@@ -271,7 +271,7 @@ export class FriendsService {
     request: RoomJoinRequest,
     host: User,
     accept: boolean
-  ): Promise<void> {
+  ): Promise<ListeningRoom | null> {
     if (request.hostId !== host.id) {
       throw new Error('Unauthorized: Only the room host can approve or reject join requests.');
     }
@@ -329,18 +329,21 @@ export class FriendsService {
         role: 'listener',
         joinedAt: now,
         lastHeartbeat: now,
+        playbackState: 'idle',
       };
       const updatedParticipants = {
         ...room.participants,
         [request.userId]: participant,
       };
 
-      await this.saveRoom({
+      const updatedRoom: ListeningRoom = {
         ...room,
         participants: updatedParticipants,
         memberUids: Object.keys(updatedParticipants),
         updatedAt: now,
-      });
+      };
+
+      await this.saveRoom(updatedRoom);
 
       // 5. Establish permanent Friendship
       await this.createFriendship(host, {
@@ -349,7 +352,10 @@ export class FriendsService {
         email: request.userEmail,
         photoURL: request.userPhotoURL,
       });
+
+      return updatedRoom;
     }
+    return null;
   }
 
   subscribeToIncomingRequests(
@@ -742,11 +748,16 @@ export class FriendsService {
     await this.saveRoom(updatedRoom);
   }
 
-  async sendHeartbeat(roomId: string, user: User): Promise<void> {
+  async sendHeartbeat(
+    roomId: string,
+    user: User,
+    playbackState: 'idle' | 'buffering' | 'playing' | 'paused' | 'failed' = 'idle'
+  ): Promise<void> {
     const room = await this.getRoom(roomId);
-    if (!room || !room.participants[user.id]) return;
+    if (!room || !room.participants || !room.participants[user.id]) return;
 
     room.participants[user.id].lastHeartbeat = Date.now();
+    room.participants[user.id].playbackState = playbackState;
     await this.saveRoom(room);
   }
 
@@ -802,7 +813,11 @@ export class FriendsService {
       try {
         unsubFirestore = onSnapshot(doc(db, 'listeningRooms', roomId), (snap) => {
           if (snap.exists()) {
-            callback(snap.data() as ListeningRoom);
+            const data = snap.data() as ListeningRoom;
+            const all = readLocal<ListeningRoom>(LS_ROOMS);
+            all[roomId] = data;
+            writeLocal(LS_ROOMS, all);
+            callback(data);
           } else {
             callback(null);
           }
@@ -822,7 +837,9 @@ export class FriendsService {
 
     const update = () => {
       const all = readLocal<ListeningRoom>(LS_ROOMS);
-      callback(all[roomId] || null);
+      if (all[roomId]) {
+        callback(all[roomId]);
+      }
     };
 
     update();

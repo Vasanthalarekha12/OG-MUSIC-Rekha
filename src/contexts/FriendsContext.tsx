@@ -149,12 +149,26 @@ export const FriendsProvider = ({ children }: { children: ReactNode }) => {
   useEffect(() => {
     if (!activeRoom || !user || activeRoom.status !== 'active') return;
 
+    const currentPlaybackState =
+      player.playbackVerifiedState === 'PLAYING'
+        ? 'playing'
+        : player.playbackVerifiedState === 'BUFFERING' || player.playbackVerifiedState === 'SOURCE_RESOLVING'
+        ? 'buffering'
+        : player.playbackVerifiedState === 'PAUSED'
+        ? 'paused'
+        : player.playbackVerifiedState === 'FAILED'
+        ? 'failed'
+        : 'idle';
+
+    // Immediate heartbeat on mount/change
+    friendsService.sendHeartbeat(activeRoom.id, user, currentPlaybackState);
+
     const interval = setInterval(() => {
-      friendsService.sendHeartbeat(activeRoom.id, user);
+      friendsService.sendHeartbeat(activeRoom.id, user, currentPlaybackState);
     }, 15000);
 
     return () => clearInterval(interval);
-  }, [activeRoom?.id, user]);
+  }, [activeRoom?.id, user, player.playbackVerifiedState]);
 
   // 5. HOST BROADCASTER: When host changes song or play/pause/seek, update the room
   useEffect(() => {
@@ -478,11 +492,13 @@ export const FriendsProvider = ({ children }: { children: ReactNode }) => {
       if (updatedReq?.status === 'accepted') {
         setJoinRequestStatus('accepted');
         unsub();
-        // Load the room with retry to ensure host write propagation
+        // Load the room with retry to ensure host write propagation contains user in participants
         let room = await friendsService.getRoom(invite.roomId);
-        if (!room) {
+        let retries = 5;
+        while (retries > 0 && (!room || !room.participants?.[user.id])) {
           await new Promise(r => setTimeout(r, 400));
           room = await friendsService.getRoom(invite.roomId);
+          retries--;
         }
         if (room && room.status === 'active') {
           setActiveRoom(room);
@@ -497,13 +513,19 @@ export const FriendsProvider = ({ children }: { children: ReactNode }) => {
 
   const acceptJoinRequest = async (req: RoomJoinRequest): Promise<void> => {
     if (!user) return;
-    await friendsService.respondToRequest(req, user, true);
+    const updatedRoom = await friendsService.respondToRequest(req, user, true);
+    if (updatedRoom) {
+      setActiveRoom(updatedRoom);
+    }
     setPendingRequests(prev => prev.filter(r => r.id !== req.id));
   };
 
   const rejectJoinRequest = async (req: RoomJoinRequest): Promise<void> => {
     if (!user) return;
-    await friendsService.respondToRequest(req, user, false);
+    const updatedRoom = await friendsService.respondToRequest(req, user, false);
+    if (updatedRoom) {
+      setActiveRoom(updatedRoom);
+    }
     setPendingRequests(prev => prev.filter(r => r.id !== req.id));
   };
 

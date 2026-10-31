@@ -63,21 +63,23 @@ service cloud.firestore {
 
     // Room Join Requests (Guest requests admission to room)
     match /roomJoinRequests/{requestId} {
-      // Requester and Host can read the request
+      // Requester and Host can read the request (or anyone reading an uncreated doc)
       allow read: if isAuthenticated() && (
+        resource == null ||
         resource.data.userId == request.auth.uid ||
         resource.data.hostId == request.auth.uid
       );
 
-      // Authenticated guest can create a pending request for themselves
+      // Authenticated guest can create or update their own pending request
       allow create: if isAuthenticated() &&
         request.resource.data.userId == request.auth.uid &&
         request.resource.data.status == 'pending';
 
-      // Only the host can accept or reject the request
-      allow update: if isAuthenticated() &&
-        resource.data.hostId == request.auth.uid &&
-        (request.resource.data.status == 'accepted' || request.resource.data.status == 'rejected');
+      // Guest can re-request admission (set to pending) OR Host can accept/reject
+      allow update: if isAuthenticated() && (
+        (request.resource.data.userId == request.auth.uid && request.resource.data.status == 'pending') ||
+        (resource.data.hostId == request.auth.uid && (request.resource.data.status == 'accepted' || request.resource.data.status == 'rejected'))
+      );
 
       // Cleanup
       allow delete: if isAuthenticated() && (
